@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package analysis
 
 // This file computes the markup for information from go/types:
@@ -20,12 +22,12 @@ package analysis
 
 import (
 	"fmt"
+	"go/types"
 	"reflect"
 	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/loader"
-	"golang.org/x/tools/go/types"
 	"golang.org/x/tools/go/types/typeutil"
 )
 
@@ -69,6 +71,7 @@ func (a *analysis) doTypeInfo(info *loader.PackageInfo, implements map[*types.Na
 	}
 
 	// RESOLUTION
+	qualifier := types.RelativeTo(info.Pkg)
 	for id, obj := range info.Uses {
 		// Position of the object definition.
 		pos := obj.Pos()
@@ -92,7 +95,7 @@ func (a *analysis) doTypeInfo(info *loader.PackageInfo, implements map[*types.Na
 		fi.addLink(aLink{
 			start: offset,
 			end:   offset + len(id.Name),
-			title: types.ObjectString(info.Pkg, obj),
+			title: types.ObjectString(obj, qualifier),
 			href:  a.posURL(pos, Len),
 		})
 	}
@@ -106,7 +109,7 @@ func (a *analysis) doTypeInfo(info *loader.PackageInfo, implements map[*types.Na
 }
 
 func (a *analysis) namedType(obj *types.TypeName, implements map[*types.Named]implementsFacts) {
-	this := obj.Pkg()
+	qualifier := types.RelativeTo(obj.Pkg())
 	T := obj.Type().(*types.Named)
 	v := &TypeInfoJSON{
 		Name:    obj.Name(),
@@ -130,7 +133,7 @@ func (a *analysis) namedType(obj *types.TypeName, implements map[*types.Named]im
 			ByKind: byKind,
 			Other: anchorJSON{
 				Href: a.posURL(Tobj.Pos(), len(Tobj.Name())),
-				Text: types.TypeString(this, T),
+				Text: types.TypeString(T, qualifier),
 			},
 		})
 	}
@@ -142,7 +145,7 @@ func (a *analysis) namedType(obj *types.TypeName, implements map[*types.Named]im
 			// "T is implemented by <iface>"...
 			// "T implements        <iface>"...
 			group := implGroupJSON{
-				Descr: types.TypeString(this, T),
+				Descr: types.TypeString(T, qualifier),
 			}
 			// Show concrete types first; use two passes.
 			for _, sub := range r.to {
@@ -164,7 +167,7 @@ func (a *analysis) namedType(obj *types.TypeName, implements map[*types.Named]im
 			if r.from != nil {
 				// "T implements <iface>"...
 				group := implGroupJSON{
-					Descr: types.TypeString(this, T),
+					Descr: types.TypeString(T, qualifier),
 				}
 				for _, super := range r.from {
 					addFact(&group, super, false)
@@ -174,7 +177,7 @@ func (a *analysis) namedType(obj *types.TypeName, implements map[*types.Named]im
 			if r.fromPtr != nil {
 				// "*C implements <iface>"...
 				group := implGroupJSON{
-					Descr: "*" + types.TypeString(this, T),
+					Descr: "*" + types.TypeString(T, qualifier),
 				}
 				for _, psuper := range r.fromPtr {
 					addFact(&group, psuper, false)
@@ -190,7 +193,7 @@ func (a *analysis) namedType(obj *types.TypeName, implements map[*types.Named]im
 		pos := meth.Pos() // may be 0 for error.Error
 		v.Methods = append(v.Methods, anchorJSON{
 			Href: a.posURL(pos, len(meth.Name())),
-			Text: types.SelectionString(this, sel),
+			Text: types.SelectionString(sel, qualifier),
 		})
 	}
 
@@ -207,18 +210,15 @@ func (a *analysis) namedType(obj *types.TypeName, implements map[*types.Named]im
 
 	// Add info for exported package-level types to the package info.
 	if obj.Exported() && isPackageLevel(obj) {
-		// TODO(adonovan): this.Path() is not unique!
+		// TODO(adonovan): Path is not unique!
 		// It is possible to declare a non-test package called x_test.
-		a.result.pkgInfo(this.Path()).addType(v)
+		a.result.pkgInfo(obj.Pkg().Path()).addType(v)
 	}
 }
 
 // -- utilities --------------------------------------------------------
 
-func isInterface(T types.Type) bool {
-	_, isI := T.Underlying().(*types.Interface)
-	return isI
-}
+func isInterface(T types.Type) bool { return types.IsInterface(T) }
 
 // deref returns a pointer's element type; otherwise it returns typ.
 func deref(typ types.Type) types.Type {

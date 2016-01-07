@@ -64,20 +64,6 @@ type Caller struct {
 	Caller string `json:"caller"`        // full name of calling function
 }
 
-// A CallGraph is one element of the slice returned by a 'callgraph' query.
-// The index of each item in the slice is used to identify it in the
-// Callers adjacency list.
-//
-// Multiple nodes may have the same Name due to context-sensitive
-// treatment of some functions.
-//
-// TODO(adonovan): perhaps include edge labels (i.e. callsites).
-type CallGraph struct {
-	Name     string `json:"name"`               // full name of function
-	Pos      string `json:"pos"`                // location of function
-	Children []int  `json:"children,omitempty"` // indices of child nodes in callgraph list
-}
-
 // A CallStack is the result of a 'callstack' query.
 // It indicates an arbitrary path from the root of the callgraph to
 // the query function.
@@ -101,7 +87,6 @@ type FreeVar struct {
 }
 
 // An Implements contains the result of an 'implements' query.
-
 // It describes the queried type, the set of named non-empty interface
 // types to which it is assignable, and the set of named/*named types
 // (concrete or non-empty interface) which may be assigned to it.
@@ -111,6 +96,15 @@ type Implements struct {
 	AssignableTo      []ImplementsType `json:"to,omitempty"`      // types assignable to T
 	AssignableFrom    []ImplementsType `json:"from,omitempty"`    // interface types assignable from T
 	AssignableFromPtr []ImplementsType `json:"fromptr,omitempty"` // interface types assignable only from *T
+
+	// The following fields are set only if the query was a method.
+	// Assignable{To,From,FromPtr}Method[i] is the corresponding
+	// method of type Assignable{To,From,FromPtr}[i], or blank
+	// {"",""} if that type lacks the method.
+	Method                  *DescribeMethod  `json:"method,omitempty"` //  the queried method
+	AssignableToMethod      []DescribeMethod `json:"to_method,omitempty"`
+	AssignableFromMethod    []DescribeMethod `json:"from_method,omitempty"`
+	AssignableFromPtrMethod []DescribeMethod `json:"fromptr_method,omitempty"`
 }
 
 // An ImplementsType describes a single type as part of an 'implements' query.
@@ -224,11 +218,6 @@ type Describe struct {
 	Value   *DescribeValue   `json:"value,omitempty"`
 }
 
-type PTAWarning struct {
-	Pos     string `json:"pos"`     // location associated with warning
-	Message string `json:"message"` // warning message
-}
-
 // A WhichErrs is the result of a 'whicherrs' query.
 // It contains the position of the queried error and the possible globals,
 // constants, and types it may point to.
@@ -256,7 +245,6 @@ type Result struct {
 	// the one specified by 'mode'.
 	Callees    *Callees    `json:"callees,omitempty"`
 	Callers    []Caller    `json:"callers,omitempty"`
-	Callgraph  []CallGraph `json:"callgraph,omitempty"`
 	Callstack  *CallStack  `json:"callstack,omitempty"`
 	Definition *Definition `json:"definition,omitempty"`
 	Describe   *Describe   `json:"describe,omitempty"`
@@ -267,6 +255,4 @@ type Result struct {
 	Referrers  *Referrers  `json:"referrers,omitempty"`
 	What       *What       `json:"what,omitempty"`
 	WhichErrs  *WhichErrs  `json:"whicherrs,omitempty"`
-
-	Warnings []PTAWarning `json:"warnings,omitempty"` // warnings from pointer analysis
 }

@@ -6,6 +6,7 @@ package java // import "golang.org/x/mobile/bind/java"
 
 //#cgo LDFLAGS: -llog
 //#include <android/log.h>
+//#include <jni.h>
 //#include <stdint.h>
 //#include <string.h>
 //#include "seq_android.h"
@@ -15,8 +16,8 @@ import (
 	"sync"
 	"unsafe"
 
-	"golang.org/x/mobile/app"
 	"golang.org/x/mobile/bind/seq"
+	"golang.org/x/mobile/internal/mobileinit"
 )
 
 const maxSliceLen = 1<<31 - 1
@@ -27,12 +28,20 @@ const debug = false
 //export Send
 func Send(descriptor string, code int, req *C.uint8_t, reqlen C.size_t, res **C.uint8_t, reslen *C.size_t) {
 	fn := seq.Registry[descriptor][code]
+	if fn == nil {
+		panic(fmt.Sprintf("invalid descriptor(%s) and code(0x%x)", descriptor, code))
+	}
 	in := new(seq.Buffer)
 	if reqlen > 0 {
 		in.Data = (*[maxSliceLen]byte)(unsafe.Pointer(req))[:reqlen]
 	}
 	out := new(seq.Buffer)
 	fn(out, in)
+	// BUG(hyangah): the function returning a go byte slice (so fn writes a pointer into 'out') is unsafe.
+	// After fn is complete here, Go runtime is free to collect or move the pointed byte slice
+	// contents. (Explicitly calling runtime.GC here will surface the problem?)
+	// Without pinning support from Go side, it will be hard to fix it without extra copying.
+
 	seqToBuf(res, reslen, out)
 }
 
@@ -70,14 +79,8 @@ func init() {
 	res.out = make(map[int32]*seq.Buffer)
 }
 
-func init() {
-	app.JavaInit = func(javaVM uintptr) {
-		C.init_seq(unsafe.Pointer(javaVM))
-	}
-}
-
 func seqToBuf(bufptr **C.uint8_t, lenptr *C.size_t, buf *seq.Buffer) {
-	if false {
+	if debug {
 		fmt.Printf("seqToBuf tag 1, len(buf.Data)=%d, *lenptr=%d\n", len(buf.Data), *lenptr)
 	}
 	if len(buf.Data) == 0 {
@@ -130,7 +133,7 @@ func RecvRes(handle C.int32_t, out *C.uint8_t, outlen C.size_t) {
 
 // transact calls a method on a Java object instance.
 // It blocks until the call is complete.
-func transact(ref *seq.Ref, code int, in *seq.Buffer) *seq.Buffer {
+func transact(ref *seq.Ref, _ string, code int, in *seq.Buffer) *seq.Buffer {
 	recv.Lock()
 	if recv.next == 1<<31-1 {
 		panic("recv handle overflow")
@@ -157,13 +160,28 @@ func transact(ref *seq.Ref, code int, in *seq.Buffer) *seq.Buffer {
 	return out
 }
 
+func encodeString(out *seq.Buffer, v string) {
+	out.WriteUTF16(v)
+}
+
+func decodeString(in *seq.Buffer) string {
+	return in.ReadUTF16()
+}
+
 func init() {
 	seq.FinalizeRef = func(ref *seq.Ref) {
 		if ref.Num < 0 {
 			panic(fmt.Sprintf("not a Java ref: %d", ref.Num))
 		}
-		transact(ref, -1, new(seq.Buffer))
+		transact(ref, "", -1, new(seq.Buffer))
 	}
 
 	seq.Transact = transact
+	seq.EncString = encodeString
+	seq.DecString = decodeString
+}
+
+//export setContext
+func setContext(vm *C.JavaVM, ctx C.jobject) {
+	mobileinit.SetCurrentContext(unsafe.Pointer(vm), unsafe.Pointer(ctx))
 }

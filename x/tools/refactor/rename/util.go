@@ -2,10 +2,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package rename
 
 import (
 	"go/ast"
+	"go/types"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,7 +16,7 @@ import (
 	"strings"
 	"unicode"
 
-	"golang.org/x/tools/go/types"
+	"golang.org/x/tools/go/ast/astutil"
 )
 
 func objectKind(obj types.Object) string {
@@ -100,14 +103,4 @@ func sameFile(x, y string) bool {
 	return false
 }
 
-// unparen returns e with any enclosing parentheses stripped.
-func unparen(e ast.Expr) ast.Expr {
-	for {
-		p, ok := e.(*ast.ParenExpr)
-		if !ok {
-			break
-		}
-		e = p.X
-	}
-	return e
-}
+func unparen(e ast.Expr) ast.Expr { return astutil.Unparen(e) }

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package oracle
 
 import (
@@ -9,9 +11,10 @@ import (
 	"go/ast"
 	"go/printer"
 	"go/token"
+	"go/types"
 	"sort"
 
-	"golang.org/x/tools/go/types"
+	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/oracle/serial"
 )
 
@@ -28,7 +31,26 @@ import (
 // these might be interesting.  Perhaps group the results into three
 // bands.
 //
-func freevars(o *Oracle, qpos *QueryPos) (queryResult, error) {
+func freevars(q *Query) error {
+	lconf := loader.Config{Build: q.Build}
+	allowErrors(&lconf)
+
+	if _, err := importQueryPackage(q.Pos, &lconf); err != nil {
+		return err
+	}
+
+	// Load/parse/type-check the program.
+	lprog, err := lconf.Load()
+	if err != nil {
+		return err
+	}
+	q.Fset = lprog.Fset
+
+	qpos, err := parseQueryPos(lprog, q.Pos, false)
+	if err != nil {
+		return err
+	}
+
 	file := qpos.path[len(qpos.path)-1] // the enclosing file
 	fileScope := qpos.info.Scopes[file]
 	pkgScope := fileScope.Parent()
@@ -118,7 +140,7 @@ func freevars(o *Oracle, qpos *QueryPos) (queryResult, error) {
 				}
 
 				typ := qpos.info.TypeOf(n.(ast.Expr))
-				ref := freevarsRef{kind, printNode(o.fset, n), typ, obj}
+				ref := freevarsRef{kind, printNode(lprog.Fset, n), typ, obj}
 				refsMap[ref.ref] = ref
 
 				if prune {
@@ -136,14 +158,15 @@ func freevars(o *Oracle, qpos *QueryPos) (queryResult, error) {
 	}
 	sort.Sort(byRef(refs))
 
-	return &freevarsResult{
+	q.result = &freevarsResult{
 		qpos: qpos,
 		refs: refs,
-	}, nil
+	}
+	return nil
 }
 
 type freevarsResult struct {
-	qpos *QueryPos
+	qpos *queryPos
 	refs []freevarsRef
 }
 
@@ -159,11 +182,12 @@ func (r *freevarsResult) display(printf printfFunc) {
 		printf(r.qpos, "No free identifiers.")
 	} else {
 		printf(r.qpos, "Free identifiers:")
+		qualifier := types.RelativeTo(r.qpos.info.Pkg)
 		for _, ref := range r.refs {
 			// Avoid printing "type T T".
 			var typstr string
 			if ref.kind != "type" {
-				typstr = " " + types.TypeString(r.qpos.info.Pkg, ref.typ)
+				typstr = " " + types.TypeString(ref.typ, qualifier)
 			}
 			printf(ref.obj, "%s %s%s", ref.kind, ref.ref, typstr)
 		}

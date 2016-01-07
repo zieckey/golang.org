@@ -369,11 +369,11 @@ func FromDir(dir, srcRoot string) (vcs *Cmd, root string, err error) {
 type RepoRoot struct {
 	VCS *Cmd
 
-	// repo is the repository URL, including scheme
+	// Repo is the repository URL, including scheme.
 	Repo string
 
-	// root is the import path corresponding to the root of the
-	// repository
+	// Root is the import path corresponding to the root of the
+	// repository.
 	Root string
 }
 
@@ -478,11 +478,11 @@ func RepoRootForImportPathStatic(importPath, scheme string) (*RepoRoot, error) {
 // RepoRootForImportDynamic finds a *RepoRoot for a custom domain that's not
 // statically known by RepoRootForImportPathStatic.
 //
-// This handles "vanity import paths" like "name.tld/pkg/foo".
+// This handles custom import paths like "name.tld/pkg/foo" or just "name.tld".
 func RepoRootForImportDynamic(importPath string, verbose bool) (*RepoRoot, error) {
 	slash := strings.Index(importPath, "/")
 	if slash < 0 {
-		return nil, errors.New("import path doesn't contain a slash")
+		slash = len(importPath)
 	}
 	host := importPath[:slash]
 	if !strings.Contains(host, ".") {

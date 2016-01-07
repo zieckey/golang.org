@@ -34,8 +34,7 @@ import (
 	"flag"
 	"go/ast"
 	"go/token"
-
-	"golang.org/x/tools/go/types"
+	"go/types"
 )
 
 var strictShadowing = flag.Bool("shadowstrict", false, "whether to be strict about shadowing; can be noisy")
@@ -213,7 +212,7 @@ func checkShadowing(f *File, ident *ast.Ident) {
 	}
 	// obj.Parent.Parent is the surrounding scope. If we can find another declaration
 	// starting from there, we have a shadowed identifier.
-	_, shadowed := obj.Parent().Parent().LookupParent(obj.Name())
+	_, shadowed := obj.Parent().Parent().LookupParent(obj.Name(), obj.Pos())
 	if shadowed == nil {
 		return
 	}

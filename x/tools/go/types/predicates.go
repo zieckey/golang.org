@@ -71,7 +71,8 @@ func isConstType(typ Type) bool {
 	return ok && t.info&IsConstType != 0
 }
 
-func isInterface(typ Type) bool {
+// IsInterface reports whether typ is an interface type.
+func IsInterface(typ Type) bool {
 	_, ok := typ.Underlying().(*Interface)
 	return ok
 }
@@ -295,7 +296,7 @@ func defaultType(typ Type) Type {
 		case UntypedInt:
 			return Typ[Int]
 		case UntypedRune:
-			return UniverseRune // use 'rune' name
+			return universeRune // use 'rune' name
 		case UntypedFloat:
 			return Typ[Float64]
 		case UntypedComplex:

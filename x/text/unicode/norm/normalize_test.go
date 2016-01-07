@@ -100,7 +100,8 @@ var cgj = GraphemeJoiner
 
 var decomposeSegmentTests = []PositionTest{
 	// illegal runes
-	{"\xC0", 0, ""},
+	{"\xC2", 0, ""},
+	{"\xC0", 1, "\xC0"},
 	{"\u00E0\x80", 2, "\u0061\u0300"},
 	// starter
 	{"a", 1, "a"},
@@ -113,7 +114,25 @@ var decomposeSegmentTests = []PositionTest{
 	{"\u00C0b", 2, "A\u0300"},
 	// long
 	{grave(31), 60, grave(30) + cgj},
+	{"a" + grave(31), 61, "a" + grave(30) + cgj},
+
+	// Stability tests: see http://www.unicode.org/review/pr-29.html.
+	// U+0300 COMBINING GRAVE ACCENT;Mn;230;NSM;;;;;N;NON-SPACING GRAVE;;;;
+	// U+0B47 ORIYA VOWEL SIGN E;Mc;0;L;;;;;N;;;;;
+	// U+0B3E ORIYA VOWEL SIGN AA;Mc;0;L;;;;;N;;;;;
+	// U+1100 HANGUL CHOSEONG KIYEOK;Lo;0;L;;;;;N;;;;;
+	// U+1161 HANGUL JUNGSEONG A;Lo;0;L;;;;;N;;;;;
+	{"\u0B47\u0300\u0B3E", 8, "\u0B47\u0300\u0B3E"},
+	{"\u1100\u0300\u1161", 8, "\u1100\u0300\u1161"},
+	{"\u0B47\u0B3E", 6, "\u0B47\u0B3E"},
+	{"\u1100\u1161", 6, "\u1100\u1161"},
+
+	// U+04DA MALAYALAM VOWEL SIGN O;Mc;0;L;0D46 0D3E;;;;N;;;;;
+	// Sequence of decomposing characters that are starters and modifiers.
+	{"\u0d4a" + strings.Repeat("\u0d3e", 31), 90, "\u0d46" + strings.Repeat("\u0d3e", 30) + cgj},
+
 	{grave(30), 60, grave(30)},
+	// U+FF9E is a starter, but decomposes to U+3099, which is not.
 	{grave(30) + "\uff9e", 60, grave(30) + cgj},
 	// ends with incomplete UTF-8 encoding
 	{"\xCC", 0, ""},
@@ -245,7 +264,7 @@ var lastBoundaryTests = []PositionTest{
 	// illegal runes
 	{"\xff", 1, ""},
 	{"aa\xff", 3, ""},
-	{"a\xff\u0300", 1, ""},
+	{"a\xff\u0300", 1, ""}, // TODO: should probably be 2.
 	{"\xc0\x80\x80", 3, ""},
 	{"\xc0\x80\x80\u0300", 3, ""},
 	// ends with incomplete UTF-8 encoding
@@ -259,8 +278,8 @@ var lastBoundaryTests = []PositionTest{
 	{"a\u0300\u0301", 0, ""},
 	{"aaaa\u0300\u0301", 3, ""},
 	{"\u0300a\u0300\u0301", 2, ""},
-	{"\u00C0", 0, ""},
-	{"a\u00C0", 1, ""},
+	{"\u00C2", 0, ""},
+	{"a\u00C2", 1, ""},
 	// decomposition may recombine
 	{"\u0226", 0, ""},
 	// no boundary
@@ -551,6 +570,44 @@ var appendTestsNFC = []AppendTest{
 		"",
 		"a" + rep(0x0305, maxNonStarters+4) + "\u0316",
 		"a" + rep(0x0305, maxNonStarters) + cgj + "\u0316" + rep(0x305, 4),
+	},
+
+	{ // Combine across non-blocking non-starters.
+		// U+0327 COMBINING CEDILLA;Mn;202;NSM;;;;;N;NON-SPACING CEDILLA;;;;
+		// U+0325 COMBINING RING BELOW;Mn;220;NSM;;;;;N;NON-SPACING RING BELOW;;;;
+		"", "a\u0327\u0325", "\u1e01\u0327",
+	},
+
+	{ // Jamo V+T does not combine.
+		"",
+		"\u1161\u11a8",
+		"\u1161\u11a8",
+	},
+
+	// Stability tests: see http://www.unicode.org/review/pr-29.html.
+	{"", "\u0b47\u0300\u0b3e", "\u0b47\u0300\u0b3e"},
+	{"", "\u1100\u0300\u1161", "\u1100\u0300\u1161"},
+	{"", "\u0b47\u0b3e", "\u0b4b"},
+	{"", "\u1100\u1161", "\uac00"},
+
+	// U+04DA MALAYALAM VOWEL SIGN O;Mc;0;L;0D46 0D3E;;;;N;;;;;
+	{ // 0d4a starts a new segment.
+		"",
+		"\u0d4a" + strings.Repeat("\u0d3e", 15) + "\u0d4a" + strings.Repeat("\u0d3e", 15),
+		"\u0d4a" + strings.Repeat("\u0d3e", 15) + "\u0d4a" + strings.Repeat("\u0d3e", 15),
+	},
+
+	{ // Split combining characters.
+		// TODO: don't insert CGJ before starters.
+		"",
+		"\u0d46" + strings.Repeat("\u0d3e", 31),
+		"\u0d4a" + strings.Repeat("\u0d3e", 29) + cgj + "\u0d3e",
+	},
+
+	{ // Split combining characters.
+		"",
+		"\u0d4a" + strings.Repeat("\u0d3e", 30),
+		"\u0d4a" + strings.Repeat("\u0d3e", 29) + cgj + "\u0d3e",
 	},
 }
 

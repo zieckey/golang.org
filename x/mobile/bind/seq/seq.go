@@ -16,11 +16,15 @@ package seq // import "golang.org/x/mobile/bind/seq"
 //	bindings which requires deconstructing seq into something
 //	gnarly. So don't get too attached to the design.
 
-import "fmt"
+import (
+	"fmt"
+
+	_ "golang.org/x/mobile/internal/mobileinit"
+)
 
 // Transact calls a method on a foreign object instance.
 // It blocks until the call is complete.
-var Transact func(ref *Ref, code int, in *Buffer) (out *Buffer)
+var Transact func(ref *Ref, desc string, code int, in *Buffer) (out *Buffer)
 
 // FinalizeRef is the finalizer used on foreign objects.
 var FinalizeRef func(ref *Ref)
@@ -44,3 +48,9 @@ func Register(descriptor string, code int, fn Func) {
 	}
 	m[code] = fn
 }
+
+// DecString decodes a string encoded in the Buffer.
+var DecString func(in *Buffer) string
+
+// EncString encodes a Go string into the Buffer.
+var EncString func(out *Buffer, v string)

@@ -14,6 +14,19 @@
 (function() {
 'use strict';
 
+// Mobile-friendly topbar menu
+$(function() {
+  var menu = $('#menu');
+  var menuButton = $('#menu-button');
+  var menuButtonArrow = $('#menu-button-arrow');
+  menuButton.click(function(event) {
+    menu.toggleClass('menu-visible');
+    menuButtonArrow.toggleClass('vertical-flip');
+    event.preventDefault();
+    return false;
+  });
+});
+
 function bindSearchEvents() {
 
   var search = $('#search');
@@ -65,7 +78,7 @@ function generateTOC() {
     if ($(node).is('h2')) {
       item = $('<dt/>');
     } else { // h3
-      item = $('<dd/>');
+      item = $('<dd class="indent"/>');
     }
     item.append(link);
     toc_items.push(item);
@@ -232,6 +245,58 @@ function toggleHash() {
     }
 }
 
+function personalizeInstallInstructions() {
+  var prefix = '?download=';
+  var s = window.location.search;
+  if (s.indexOf(prefix) != 0) {
+    // No 'download' query string; bail.
+    return;
+  }
+
+  var filename = s.substr(prefix.length);
+  var filenameRE = /^go1\.\d+(\.\d+)?([a-z0-9]+)?\.([a-z0-9]+)(-[a-z0-9]+)?(-osx10\.[68])?\.([a-z.]+)$/;
+  $('.downloadFilename').text(filename);
+  $('.hideFromDownload').hide();
+  var m = filenameRE.exec(filename);
+  if (!m) {
+    // Can't interpret file name; bail.
+    return;
+  }
+
+  var os = m[3];
+  var ext = m[6];
+  if (ext != 'tar.gz') {
+    $('#tarballInstructions').hide();
+  }
+  if (os != 'darwin' || ext != 'pkg') {
+    $('#darwinPackageInstructions').hide();
+  }
+  if (os != 'windows') {
+    $('#windowsInstructions').hide();
+    $('.testUnix').show();
+    $('.testWindows').hide();
+  } else {
+    if (ext != 'msi') {
+      $('#windowsInstallerInstructions').hide();
+    }
+    if (ext != 'zip') {
+      $('#windowsZipInstructions').hide();
+    }
+    $('.testUnix').hide();
+    $('.testWindows').show();
+  }
+
+  var download = "https://storage.googleapis.com/golang/" + filename;
+
+  var message = $('<p class="downloading">'+
+    'Your download should begin shortly. '+
+    'If it does not, click <a>this link</a>.</p>');
+  message.find('a').attr('href', download);
+  message.insertAfter('#nav');
+
+  window.location = download;
+}
+
 $(document).ready(function() {
   bindSearchEvents();
   generateTOC();
@@ -247,6 +312,7 @@ $(document).ready(function() {
   setupTypeInfo();
   setupCallgraphs();
   toggleHash();
+  personalizeInstallInstructions();
 
   // godoc.html defines window.initFuncs in the <head> tag, and root.html and
   // codewalk.js push their on-page-ready functions to the list.

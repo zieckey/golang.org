@@ -2,19 +2,21 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package interp
 
 import (
 	"bytes"
 	"fmt"
+	exact "go/constant"
 	"go/token"
+	"go/types"
 	"strings"
 	"sync"
 	"unsafe"
 
-	"golang.org/x/tools/go/exact"
 	"golang.org/x/tools/go/ssa"
-	"golang.org/x/tools/go/types"
 )
 
 // If the target program panics, the interpreter panics with this type.
@@ -286,9 +288,7 @@ func lookup(instr *ssa.Lookup, x, idx value) value {
 			v = x.lookup(idx.(hashable))
 			ok = v != nil
 		}
-		if ok {
-			v = copyVal(v)
-		} else {
+		if !ok {
 			v = zero(instr.X.Type().Underlying().(*types.Map).Elem())
 		}
 		if instr.CommaOk {
@@ -844,7 +844,7 @@ func unop(instr *ssa.UnOp, x value) value {
 			return -x
 		}
 	case token.MUL:
-		return copyVal(*x.(*value)) // load
+		return load(deref(instr.X.Type()), x.(*value))
 	case token.NOT:
 		return !x.(bool)
 	case token.XOR:
@@ -891,7 +891,7 @@ func typeAssert(i *interpreter, instr *ssa.TypeAssert, itf iface) value {
 		err = checkInterface(i, idst, itf)
 
 	} else if types.Identical(itf.t, instr.AssertedType) {
-		v = copyVal(itf.v) // extract value
+		v = itf.v // extract value
 
 	} else {
 		err = fmt.Sprintf("interface conversion: interface is %s, not %s", itf.t, instr.AssertedType)

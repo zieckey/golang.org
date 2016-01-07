@@ -5,38 +5,23 @@
 // Generated from gl.go using go generate. DO NOT EDIT.
 // See doc.go for details.
 
+// +build linux darwin windows
 // +build gldebug
 
 package gl
 
-/*
-#cgo darwin  LDFLAGS: -framework OpenGL
-#cgo linux   LDFLAGS: -lGLESv2
-#cgo darwin  CFLAGS: -DGOOS_darwin
-#cgo linux   CFLAGS: -DGOOS_linux
-
-#include <stdlib.h>
-
-#ifdef GOOS_linux
-#include <GLES2/gl2.h>
-#endif
-
-#ifdef GOOS_darwin
-#include <OpenGL/gl3.h>
-#endif
-*/
-import "C"
-
 import (
 	"fmt"
 	"log"
+	"math"
+	"sync/atomic"
 	"unsafe"
 )
 
-func errDrain() string {
+func (ctx *context) errDrain() string {
 	var errs []Enum
 	for {
-		e := Enum(C.glGetError())
+		e := ctx.GetError()
 		if e == 0 {
 			break
 		}
@@ -46,6 +31,20 @@ func errDrain() string {
 		return fmt.Sprintf(" error: %v", errs)
 	}
 	return ""
+}
+
+func (ctx *context) enqueueDebug(c call) uintptr {
+	numCalls := atomic.AddInt32(&ctx.debug, 1)
+	if numCalls > 1 {
+		panic("concurrent calls made to the same GL context")
+	}
+	defer func() {
+		if atomic.AddInt32(&ctx.debug, -1) > 0 {
+			select {} // block so you see us in the panic
+		}
+	}()
+
+	return ctx.enqueue(c)
 }
 
 func (v Enum) String() string {
@@ -643,493 +642,873 @@ func (v Enum) String() string {
 	}
 }
 
-func ActiveTexture(texture Enum) {
+func (ctx *context) ActiveTexture(texture Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.ActiveTexture(%v) %v", texture, errstr)
 	}()
-	C.glActiveTexture(texture.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnActiveTexture,
+			a0: texture.c(),
+		},
+		blocking: true})
 }
 
-func AttachShader(p Program, s Shader) {
+func (ctx *context) AttachShader(p Program, s Shader) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.AttachShader(%v, %v) %v", p, s, errstr)
 	}()
-	C.glAttachShader(p.c(), s.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnAttachShader,
+			a0: p.c(),
+			a1: s.c(),
+		},
+		blocking: true})
 }
 
-func BindAttribLocation(p Program, a Attrib, name string) {
+func (ctx *context) BindAttribLocation(p Program, a Attrib, name string) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.BindAttribLocation(%v, %v, %v) %v", p, a, name, errstr)
 	}()
-	str := unsafe.Pointer(C.CString(name))
-	defer C.free(str)
-	C.glBindAttribLocation(p.c(), a.c(), (*C.GLchar)(str))
+	s, free := ctx.cString(name)
+	defer free()
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnBindAttribLocation,
+			a0: p.c(),
+			a1: a.c(),
+			a2: s,
+		},
+		blocking: true,
+	})
 }
 
-func BindBuffer(target Enum, b Buffer) {
+func (ctx *context) BindBuffer(target Enum, b Buffer) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.BindBuffer(%v, %v) %v", target, b, errstr)
 	}()
-	C.glBindBuffer(target.c(), b.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnBindBuffer,
+			a0: target.c(),
+			a1: b.c(),
+		},
+		blocking: true})
 }
 
-func BindFramebuffer(target Enum, fb Framebuffer) {
+func (ctx *context) BindFramebuffer(target Enum, fb Framebuffer) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.BindFramebuffer(%v, %v) %v", target, fb, errstr)
 	}()
-	C.glBindFramebuffer(target.c(), fb.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnBindFramebuffer,
+			a0: target.c(),
+			a1: fb.c(),
+		},
+		blocking: true})
 }
 
-func BindRenderbuffer(target Enum, rb Renderbuffer) {
+func (ctx *context) BindRenderbuffer(target Enum, rb Renderbuffer) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.BindRenderbuffer(%v, %v) %v", target, rb, errstr)
 	}()
-	C.glBindRenderbuffer(target.c(), rb.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnBindRenderbuffer,
+			a0: target.c(),
+			a1: rb.c(),
+		},
+		blocking: true})
 }
 
-func BindTexture(target Enum, t Texture) {
+func (ctx *context) BindTexture(target Enum, t Texture) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.BindTexture(%v, %v) %v", target, t, errstr)
 	}()
-	C.glBindTexture(target.c(), t.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnBindTexture,
+			a0: target.c(),
+			a1: t.c(),
+		},
+		blocking: true})
 }
 
-func BlendColor(red, green, blue, alpha float32) {
+func (ctx *context) BlendColor(red, green, blue, alpha float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.BlendColor(%v, %v, %v, %v) %v", red, green, blue, alpha, errstr)
 	}()
-	blendColor(red, green, blue, alpha)
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnBlendColor,
+			a0: uintptr(math.Float32bits(red)),
+			a1: uintptr(math.Float32bits(green)),
+			a2: uintptr(math.Float32bits(blue)),
+			a3: uintptr(math.Float32bits(alpha)),
+		},
+		blocking: true})
 }
 
-func BlendEquation(mode Enum) {
+func (ctx *context) BlendEquation(mode Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.BlendEquation(%v) %v", mode, errstr)
 	}()
-	C.glBlendEquation(mode.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnBlendEquation,
+			a0: mode.c(),
+		},
+		blocking: true})
 }
 
-func BlendEquationSeparate(modeRGB, modeAlpha Enum) {
+func (ctx *context) BlendEquationSeparate(modeRGB, modeAlpha Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.BlendEquationSeparate(%v, %v) %v", modeRGB, modeAlpha, errstr)
 	}()
-	C.glBlendEquationSeparate(modeRGB.c(), modeAlpha.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnBlendEquationSeparate,
+			a0: modeRGB.c(),
+			a1: modeAlpha.c(),
+		},
+		blocking: true})
 }
 
-func BlendFunc(sfactor, dfactor Enum) {
+func (ctx *context) BlendFunc(sfactor, dfactor Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.BlendFunc(%v, %v) %v", sfactor, dfactor, errstr)
 	}()
-	C.glBlendFunc(sfactor.c(), dfactor.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnBlendFunc,
+			a0: sfactor.c(),
+			a1: dfactor.c(),
+		},
+		blocking: true})
 }
 
-func BlendFuncSeparate(sfactorRGB, dfactorRGB, sfactorAlpha, dfactorAlpha Enum) {
+func (ctx *context) BlendFuncSeparate(sfactorRGB, dfactorRGB, sfactorAlpha, dfactorAlpha Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.BlendFuncSeparate(%v, %v, %v, %v) %v", sfactorRGB, dfactorRGB, sfactorAlpha, dfactorAlpha, errstr)
 	}()
-	C.glBlendFuncSeparate(sfactorRGB.c(), dfactorRGB.c(), sfactorAlpha.c(), dfactorAlpha.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnBlendFuncSeparate,
+			a0: sfactorRGB.c(),
+			a1: dfactorRGB.c(),
+			a2: sfactorAlpha.c(),
+			a3: dfactorAlpha.c(),
+		},
+		blocking: true})
 }
 
-func BufferData(target Enum, usage Enum, src []byte) {
+func (ctx *context) BufferData(target Enum, src []byte, usage Enum) {
 	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.BufferData(%v, %v, len(%d)) %v", target, usage, len(src), errstr)
+		errstr := ctx.errDrain()
+		log.Printf("gl.BufferData(%v, len(%d), %v) %v", target, len(src), usage, errstr)
 	}()
-	C.glBufferData(target.c(), C.GLsizeiptr(len(src)), unsafe.Pointer(&src[0]), usage.c())
+	parg := unsafe.Pointer(nil)
+	if len(src) > 0 {
+		parg = unsafe.Pointer(&src[0])
+	}
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnBufferData,
+			a0: target.c(),
+			a1: uintptr(len(src)),
+			a2: usage.c(),
+		},
+		parg:     parg,
+		blocking: true,
+	})
 }
 
-func BufferInit(target Enum, size int, usage Enum) {
+func (ctx *context) BufferInit(target Enum, size int, usage Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.BufferInit(%v, %v, %v) %v", target, size, usage, errstr)
 	}()
-	C.glBufferData(target.c(), C.GLsizeiptr(size), nil, usage.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnBufferData,
+			a0: target.c(),
+			a1: uintptr(size),
+			a2: 0,
+			a3: usage.c(),
+		},
+		blocking: true})
 }
 
-func BufferSubData(target Enum, offset int, data []byte) {
+func (ctx *context) BufferSubData(target Enum, offset int, data []byte) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.BufferSubData(%v, %v, len(%d)) %v", target, offset, len(data), errstr)
 	}()
-	C.glBufferSubData(target.c(), C.GLintptr(offset), C.GLsizeiptr(len(data)), unsafe.Pointer(&data[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnBufferSubData,
+			a0: target.c(),
+			a1: uintptr(offset),
+			a2: uintptr(len(data)),
+		},
+		parg:     unsafe.Pointer(&data[0]),
+		blocking: true,
+	})
 }
 
-func CheckFramebufferStatus(target Enum) (r0 Enum) {
+func (ctx *context) CheckFramebufferStatus(target Enum) (r0 Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.CheckFramebufferStatus(%v) %v%v", target, r0, errstr)
 	}()
-	return Enum(C.glCheckFramebufferStatus(target.c()))
+	return Enum(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnCheckFramebufferStatus,
+			a0: target.c(),
+		},
+		blocking: true,
+	}))
 }
 
-func Clear(mask Enum) {
+func (ctx *context) Clear(mask Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Clear(%v) %v", mask, errstr)
 	}()
-	C.glClear(C.GLbitfield(mask))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnClear,
+			a0: uintptr(mask),
+		},
+		blocking: true})
 }
 
-func ClearColor(red, green, blue, alpha float32) {
+func (ctx *context) ClearColor(red, green, blue, alpha float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.ClearColor(%v, %v, %v, %v) %v", red, green, blue, alpha, errstr)
 	}()
-	clearColor(red, green, blue, alpha)
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnClearColor,
+			a0: uintptr(math.Float32bits(red)),
+			a1: uintptr(math.Float32bits(green)),
+			a2: uintptr(math.Float32bits(blue)),
+			a3: uintptr(math.Float32bits(alpha)),
+		},
+		blocking: true})
 }
 
-func ClearDepthf(d float32) {
+func (ctx *context) ClearDepthf(d float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.ClearDepthf(%v) %v", d, errstr)
 	}()
-	clearDepthf(d)
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnClearDepthf,
+			a0: uintptr(math.Float32bits(d)),
+		},
+		blocking: true})
 }
 
-func ClearStencil(s int) {
+func (ctx *context) ClearStencil(s int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.ClearStencil(%v) %v", s, errstr)
 	}()
-	C.glClearStencil(C.GLint(s))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnClearStencil,
+			a0: uintptr(s),
+		},
+		blocking: true})
 }
 
-func ColorMask(red, green, blue, alpha bool) {
+func (ctx *context) ColorMask(red, green, blue, alpha bool) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.ColorMask(%v, %v, %v, %v) %v", red, green, blue, alpha, errstr)
 	}()
-	C.glColorMask(glBoolean(red), glBoolean(green), glBoolean(blue), glBoolean(alpha))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnColorMask,
+			a0: glBoolean(red),
+			a1: glBoolean(green),
+			a2: glBoolean(blue),
+			a3: glBoolean(alpha),
+		},
+		blocking: true})
 }
 
-func CompileShader(s Shader) {
+func (ctx *context) CompileShader(s Shader) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.CompileShader(%v) %v", s, errstr)
 	}()
-	C.glCompileShader(s.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnCompileShader,
+			a0: s.c(),
+		},
+		blocking: true})
 }
 
-func CompressedTexImage2D(target Enum, level int, internalformat Enum, width, height, border int, data []byte) {
+func (ctx *context) CompressedTexImage2D(target Enum, level int, internalformat Enum, width, height, border int, data []byte) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.CompressedTexImage2D(%v, %v, %v, %v, %v, %v, len(%d)) %v", target, level, internalformat, width, height, border, len(data), errstr)
 	}()
-	C.glCompressedTexImage2D(target.c(), C.GLint(level), internalformat.c(), C.GLsizei(width), C.GLsizei(height), C.GLint(border), C.GLsizei(len(data)), unsafe.Pointer(&data[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnCompressedTexImage2D,
+			a0: target.c(),
+			a1: uintptr(level),
+			a2: internalformat.c(),
+			a3: uintptr(width),
+			a4: uintptr(height),
+			a5: uintptr(border),
+			a6: uintptr(len(data)),
+		},
+		parg:     unsafe.Pointer(&data[0]),
+		blocking: true,
+	})
 }
 
-func CompressedTexSubImage2D(target Enum, level, xoffset, yoffset, width, height int, format Enum, data []byte) {
+func (ctx *context) CompressedTexSubImage2D(target Enum, level, xoffset, yoffset, width, height int, format Enum, data []byte) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.CompressedTexSubImage2D(%v, %v, %v, %v, %v, %v, %v, len(%d)) %v", target, level, xoffset, yoffset, width, height, format, len(data), errstr)
 	}()
-	C.glCompressedTexSubImage2D(target.c(), C.GLint(level), C.GLint(xoffset), C.GLint(yoffset), C.GLsizei(width), C.GLsizei(height), format.c(), C.GLsizei(len(data)), unsafe.Pointer(&data[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnCompressedTexSubImage2D,
+			a0: target.c(),
+			a1: uintptr(level),
+			a2: uintptr(xoffset),
+			a3: uintptr(yoffset),
+			a4: uintptr(width),
+			a5: uintptr(height),
+			a6: format.c(),
+			a7: uintptr(len(data)),
+		},
+		parg:     unsafe.Pointer(&data[0]),
+		blocking: true,
+	})
 }
 
-func CopyTexImage2D(target Enum, level int, internalformat Enum, x, y, width, height, border int) {
+func (ctx *context) CopyTexImage2D(target Enum, level int, internalformat Enum, x, y, width, height, border int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.CopyTexImage2D(%v, %v, %v, %v, %v, %v, %v, %v) %v", target, level, internalformat, x, y, width, height, border, errstr)
 	}()
-	C.glCopyTexImage2D(target.c(), C.GLint(level), internalformat.c(), C.GLint(x), C.GLint(y), C.GLsizei(width), C.GLsizei(height), C.GLint(border))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnCopyTexImage2D,
+			a0: target.c(),
+			a1: uintptr(level),
+			a2: internalformat.c(),
+			a3: uintptr(x),
+			a4: uintptr(y),
+			a5: uintptr(width),
+			a6: uintptr(height),
+			a7: uintptr(border),
+		},
+		blocking: true})
 }
 
-func CopyTexSubImage2D(target Enum, level, xoffset, yoffset, x, y, width, height int) {
+func (ctx *context) CopyTexSubImage2D(target Enum, level, xoffset, yoffset, x, y, width, height int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.CopyTexSubImage2D(%v, %v, %v, %v, %v, %v, %v, %v) %v", target, level, xoffset, yoffset, x, y, width, height, errstr)
 	}()
-	C.glCopyTexSubImage2D(target.c(), C.GLint(level), C.GLint(xoffset), C.GLint(yoffset), C.GLint(x), C.GLint(y), C.GLsizei(width), C.GLsizei(height))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnCopyTexSubImage2D,
+			a0: target.c(),
+			a1: uintptr(level),
+			a2: uintptr(xoffset),
+			a3: uintptr(yoffset),
+			a4: uintptr(x),
+			a5: uintptr(y),
+			a6: uintptr(width),
+			a7: uintptr(height),
+		},
+		blocking: true})
 }
 
-func CreateProgram() (r0 Program) {
+func (ctx *context) CreateBuffer() (r0 Buffer) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
+		log.Printf("gl.CreateBuffer() %v%v", r0, errstr)
+	}()
+	return Buffer{Value: uint32(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGenBuffer,
+		},
+		blocking: true,
+	}))}
+}
+
+func (ctx *context) CreateFramebuffer() (r0 Framebuffer) {
+	defer func() {
+		errstr := ctx.errDrain()
+		log.Printf("gl.CreateFramebuffer() %v%v", r0, errstr)
+	}()
+	return Framebuffer{Value: uint32(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGenFramebuffer,
+		},
+		blocking: true,
+	}))}
+}
+
+func (ctx *context) CreateProgram() (r0 Program) {
+	defer func() {
+		errstr := ctx.errDrain()
 		log.Printf("gl.CreateProgram() %v%v", r0, errstr)
 	}()
-	return Program{Value: uint32(C.glCreateProgram())}
+	return Program{
+		Init: true,
+		Value: uint32(ctx.enqueue(call{
+			args: fnargs{
+				fn: glfnCreateProgram,
+			},
+			blocking: true,
+		},
+		))}
 }
 
-func CreateShader(ty Enum) (r0 Shader) {
+func (ctx *context) CreateRenderbuffer() (r0 Renderbuffer) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
+		log.Printf("gl.CreateRenderbuffer() %v%v", r0, errstr)
+	}()
+	return Renderbuffer{Value: uint32(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGenRenderbuffer,
+		},
+		blocking: true,
+	}))}
+}
+
+func (ctx *context) CreateShader(ty Enum) (r0 Shader) {
+	defer func() {
+		errstr := ctx.errDrain()
 		log.Printf("gl.CreateShader(%v) %v%v", ty, r0, errstr)
 	}()
-	return Shader{Value: uint32(C.glCreateShader(ty.c()))}
+	return Shader{Value: uint32(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnCreateShader,
+			a0: uintptr(ty),
+		},
+		blocking: true,
+	}))}
 }
 
-func CullFace(mode Enum) {
+func (ctx *context) CreateTexture() (r0 Texture) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
+		log.Printf("gl.CreateTexture() %v%v", r0, errstr)
+	}()
+	return Texture{Value: uint32(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGenTexture,
+		},
+		blocking: true,
+	}))}
+}
+
+func (ctx *context) CullFace(mode Enum) {
+	defer func() {
+		errstr := ctx.errDrain()
 		log.Printf("gl.CullFace(%v) %v", mode, errstr)
 	}()
-	C.glCullFace(mode.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnCullFace,
+			a0: mode.c(),
+		},
+		blocking: true})
 }
 
-func DeleteBuffer(v Buffer) {
+func (ctx *context) DeleteBuffer(v Buffer) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.DeleteBuffer(%v) %v", v, errstr)
 	}()
-	C.glDeleteBuffers(1, (*C.GLuint)(&v.Value))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnDeleteBuffer,
+			a0: uintptr(v.Value),
+		},
+		blocking: true})
 }
 
-func DeleteFramebuffer(v Framebuffer) {
+func (ctx *context) DeleteFramebuffer(v Framebuffer) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.DeleteFramebuffer(%v) %v", v, errstr)
 	}()
-	C.glDeleteFramebuffers(1, (*C.GLuint)(&v.Value))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnDeleteFramebuffer,
+			a0: uintptr(v.Value),
+		},
+		blocking: true})
 }
 
-func DeleteProgram(p Program) {
+func (ctx *context) DeleteProgram(p Program) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.DeleteProgram(%v) %v", p, errstr)
 	}()
-	C.glDeleteProgram(p.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnDeleteProgram,
+			a0: p.c(),
+		},
+		blocking: true})
 }
 
-func DeleteRenderbuffer(v Renderbuffer) {
+func (ctx *context) DeleteRenderbuffer(v Renderbuffer) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.DeleteRenderbuffer(%v) %v", v, errstr)
 	}()
-	C.glDeleteRenderbuffers(1, (*C.GLuint)(&v.Value))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnDeleteRenderbuffer,
+			a0: v.c(),
+		},
+		blocking: true})
 }
 
-func DeleteShader(s Shader) {
+func (ctx *context) DeleteShader(s Shader) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.DeleteShader(%v) %v", s, errstr)
 	}()
-	C.glDeleteShader(s.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnDeleteShader,
+			a0: s.c(),
+		},
+		blocking: true})
 }
 
-func DeleteTexture(v Texture) {
+func (ctx *context) DeleteTexture(v Texture) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.DeleteTexture(%v) %v", v, errstr)
 	}()
-	C.glDeleteTextures(1, (*C.GLuint)(&v.Value))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnDeleteTexture,
+			a0: v.c(),
+		},
+		blocking: true})
 }
 
-func DepthFunc(fn Enum) {
+func (ctx *context) DepthFunc(fn Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.DepthFunc(%v) %v", fn, errstr)
 	}()
-	C.glDepthFunc(fn.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnDepthFunc,
+			a0: fn.c(),
+		},
+		blocking: true})
 }
 
-func DepthMask(flag bool) {
+func (ctx *context) DepthMask(flag bool) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.DepthMask(%v) %v", flag, errstr)
 	}()
-	C.glDepthMask(glBoolean(flag))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnDepthMask,
+			a0: glBoolean(flag),
+		},
+		blocking: true})
 }
 
-func DepthRangef(n, f float32) {
+func (ctx *context) DepthRangef(n, f float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.DepthRangef(%v, %v) %v", n, f, errstr)
 	}()
-	depthRangef(n, f)
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnDepthRangef,
+			a0: uintptr(math.Float32bits(n)),
+			a1: uintptr(math.Float32bits(f)),
+		},
+		blocking: true})
 }
 
-func DetachShader(p Program, s Shader) {
+func (ctx *context) DetachShader(p Program, s Shader) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.DetachShader(%v, %v) %v", p, s, errstr)
 	}()
-	C.glDetachShader(p.c(), s.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnDetachShader,
+			a0: p.c(),
+			a1: s.c(),
+		},
+		blocking: true})
 }
 
-func Disable(cap Enum) {
+func (ctx *context) Disable(cap Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Disable(%v) %v", cap, errstr)
 	}()
-	C.glDisable(cap.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnDisable,
+			a0: cap.c(),
+		},
+		blocking: true})
 }
 
-func DisableVertexAttribArray(index Attrib) {
+func (ctx *context) DisableVertexAttribArray(a Attrib) {
 	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.DisableVertexAttribArray(%v) %v", index, errstr)
+		errstr := ctx.errDrain()
+		log.Printf("gl.DisableVertexAttribArray(%v) %v", a, errstr)
 	}()
-	C.glDisableVertexAttribArray(index.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnDisableVertexAttribArray,
+			a0: a.c(),
+		},
+		blocking: true})
 }
 
-func DrawArrays(mode Enum, first, count int) {
+func (ctx *context) DrawArrays(mode Enum, first, count int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.DrawArrays(%v, %v, %v) %v", mode, first, count, errstr)
 	}()
-	C.glDrawArrays(mode.c(), C.GLint(first), C.GLsizei(count))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnDrawArrays,
+			a0: mode.c(),
+			a1: uintptr(first),
+			a2: uintptr(count),
+		},
+		blocking: true})
 }
 
-func DrawElements(mode, ty Enum, offset, count int) {
+func (ctx *context) DrawElements(mode Enum, count int, ty Enum, offset int) {
 	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.DrawElements(%v, %v, %v, %v) %v", mode, ty, offset, count, errstr)
+		errstr := ctx.errDrain()
+		log.Printf("gl.DrawElements(%v, %v, %v, %v) %v", mode, count, ty, offset, errstr)
 	}()
-	C.glDrawElements(mode.c(), C.GLsizei(count), ty.c(), unsafe.Pointer(uintptr(offset)))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnDrawElements,
+			a0: mode.c(),
+			a1: uintptr(count),
+			a2: ty.c(),
+			a3: uintptr(offset),
+		},
+		blocking: true})
 }
 
-func Enable(cap Enum) {
+func (ctx *context) Enable(cap Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Enable(%v) %v", cap, errstr)
 	}()
-	C.glEnable(cap.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnEnable,
+			a0: cap.c(),
+		},
+		blocking: true})
 }
 
-func EnableVertexAttribArray(index Attrib) {
+func (ctx *context) EnableVertexAttribArray(a Attrib) {
 	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.EnableVertexAttribArray(%v) %v", index, errstr)
+		errstr := ctx.errDrain()
+		log.Printf("gl.EnableVertexAttribArray(%v) %v", a, errstr)
 	}()
-	C.glEnableVertexAttribArray(index.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnEnableVertexAttribArray,
+			a0: a.c(),
+		},
+		blocking: true})
 }
 
-func Finish() {
+func (ctx *context) Finish() {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Finish() %v", errstr)
 	}()
-	C.glFinish()
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnFinish,
+		},
+		blocking: true,
+	})
 }
 
-func Flush() {
+func (ctx *context) Flush() {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Flush() %v", errstr)
 	}()
-	C.glFlush()
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnFlush,
+		},
+		blocking: true,
+	})
 }
 
-func FramebufferRenderbuffer(target, attachment, rbTarget Enum, rb Renderbuffer) {
+func (ctx *context) FramebufferRenderbuffer(target, attachment, rbTarget Enum, rb Renderbuffer) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.FramebufferRenderbuffer(%v, %v, %v, %v) %v", target, attachment, rbTarget, rb, errstr)
 	}()
-	C.glFramebufferRenderbuffer(target.c(), attachment.c(), rbTarget.c(), rb.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnFramebufferRenderbuffer,
+			a0: target.c(),
+			a1: attachment.c(),
+			a2: rbTarget.c(),
+			a3: rb.c(),
+		},
+		blocking: true})
 }
 
-func FramebufferTexture2D(target, attachment, texTarget Enum, t Texture, level int) {
+func (ctx *context) FramebufferTexture2D(target, attachment, texTarget Enum, t Texture, level int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.FramebufferTexture2D(%v, %v, %v, %v, %v) %v", target, attachment, texTarget, t, level, errstr)
 	}()
-	C.glFramebufferTexture2D(target.c(), attachment.c(), texTarget.c(), t.c(), C.GLint(level))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnFramebufferTexture2D,
+			a0: target.c(),
+			a1: attachment.c(),
+			a2: texTarget.c(),
+			a3: t.c(),
+			a4: uintptr(level),
+		},
+		blocking: true})
 }
 
-func FrontFace(mode Enum) {
+func (ctx *context) FrontFace(mode Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.FrontFace(%v) %v", mode, errstr)
 	}()
-	C.glFrontFace(mode.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnFrontFace,
+			a0: mode.c(),
+		},
+		blocking: true})
 }
 
-func GenBuffer() (r0 Buffer) {
+func (ctx *context) GenerateMipmap(target Enum) {
 	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.GenBuffer() %v%v", r0, errstr)
-	}()
-	var b Buffer
-	C.glGenBuffers(1, (*C.GLuint)(&b.Value))
-	return b
-}
-
-func GenerateMipmap(target Enum) {
-	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GenerateMipmap(%v) %v", target, errstr)
 	}()
-	C.glGenerateMipmap(target.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnGenerateMipmap,
+			a0: target.c(),
+		},
+		blocking: true})
 }
 
-func GenFramebuffer() (r0 Framebuffer) {
+func (ctx *context) GetActiveAttrib(p Program, index uint32) (name string, size int, ty Enum) {
 	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.GenFramebuffer() %v%v", r0, errstr)
+		errstr := ctx.errDrain()
+		log.Printf("gl.GetActiveAttrib(%v, %v) (%v, %v, %v) %v", p, index, name, size, ty, errstr)
 	}()
-	var b Framebuffer
-	C.glGenFramebuffers(1, (*C.GLuint)(&b.Value))
-	return b
+	bufSize := ctx.GetProgrami(p, ACTIVE_ATTRIBUTE_MAX_LENGTH)
+	buf := make([]byte, bufSize)
+	var cType int
+	cSize := ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGetActiveAttrib,
+			a0: p.c(),
+			a1: uintptr(index),
+			a2: uintptr(bufSize),
+			a3: uintptr(unsafe.Pointer(&cType)),
+		},
+		parg:     unsafe.Pointer(&buf[0]),
+		blocking: true,
+	})
+	return goString(buf), int(cSize), Enum(cType)
 }
 
-func GenRenderbuffer() (r0 Renderbuffer) {
+func (ctx *context) GetActiveUniform(p Program, index uint32) (name string, size int, ty Enum) {
 	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.GenRenderbuffer() %v%v", r0, errstr)
+		errstr := ctx.errDrain()
+		log.Printf("gl.GetActiveUniform(%v, %v) (%v, %v, %v) %v", p, index, name, size, ty, errstr)
 	}()
-	var b Renderbuffer
-	C.glGenRenderbuffers(1, (*C.GLuint)(&b.Value))
-	return b
+	bufSize := ctx.GetProgrami(p, ACTIVE_UNIFORM_MAX_LENGTH)
+	buf := make([]byte, bufSize+8)
+	var cType int
+	cSize := ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGetActiveUniform,
+			a0: p.c(),
+			a1: uintptr(index),
+			a2: uintptr(bufSize),
+			a3: uintptr(unsafe.Pointer(&cType)),
+		},
+		parg:     unsafe.Pointer(&buf[0]),
+		blocking: true,
+	})
+	return goString(buf), int(cSize), Enum(cType)
 }
 
-func GenTexture() (r0 Texture) {
+func (ctx *context) GetAttachedShaders(p Program) (r0 []Shader) {
 	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.GenTexture() %v%v", r0, errstr)
-	}()
-	var t Texture
-	C.glGenTextures(1, (*C.GLuint)(&t.Value))
-	return t
-}
-
-func GetActiveAttrib(p Program, a Attrib) (name string, size int, ty Enum) {
-	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.GetActiveAttrib(%v, %v) (%v, %v, %v) %v", p, a, name, size, ty, errstr)
-	}()
-	bufSize := GetProgrami(p, ACTIVE_ATTRIBUTE_MAX_LENGTH)
-	buf := C.malloc(C.size_t(bufSize))
-	defer C.free(buf)
-	var cSize C.GLint
-	var cType C.GLenum
-	C.glGetActiveAttrib(p.c(), a.c(), C.GLsizei(bufSize), nil, &cSize, &cType, (*C.GLchar)(buf))
-	return C.GoString((*C.char)(buf)), int(cSize), Enum(cType)
-}
-
-func GetActiveUniform(p Program, u Uniform) (name string, size int, ty Enum) {
-	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.GetActiveUniform(%v, %v) (%v, %v, %v) %v", p, u, name, size, ty, errstr)
-	}()
-	bufSize := GetProgrami(p, ACTIVE_UNIFORM_MAX_LENGTH)
-	buf := C.malloc(C.size_t(bufSize))
-	defer C.free(buf)
-	var cSize C.GLint
-	var cType C.GLenum
-	C.glGetActiveUniform(p.c(), C.GLuint(u.Value), C.GLsizei(bufSize), nil, &cSize, &cType, (*C.GLchar)(buf))
-	return C.GoString((*C.char)(buf)), int(cSize), Enum(cType)
-}
-
-func GetAttachedShaders(p Program) (r0 []Shader) {
-	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetAttachedShaders(%v) %v%v", p, r0, errstr)
 	}()
-	shadersLen := GetProgrami(p, ATTACHED_SHADERS)
-	var n C.GLsizei
-	buf := make([]C.GLuint, shadersLen)
-	C.glGetAttachedShaders(p.c(), C.GLsizei(shadersLen), &n, &buf[0])
+	shadersLen := ctx.GetProgrami(p, ATTACHED_SHADERS)
+	if shadersLen == 0 {
+		return nil
+	}
+	buf := make([]uint32, shadersLen)
+	n := int(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGetAttachedShaders,
+			a0: p.c(),
+			a1: uintptr(shadersLen),
+		},
+		parg:     unsafe.Pointer(&buf[0]),
+		blocking: true,
+	}))
 	buf = buf[:int(n)]
 	shaders := make([]Shader, len(buf))
 	for i, s := range buf {
@@ -1138,747 +1517,1344 @@ func GetAttachedShaders(p Program) (r0 []Shader) {
 	return shaders
 }
 
-func GetAttribLocation(p Program, name string) (r0 Attrib) {
+func (ctx *context) GetAttribLocation(p Program, name string) (r0 Attrib) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		r0.name = name
 		log.Printf("gl.GetAttribLocation(%v, %v) %v%v", p, name, r0, errstr)
 	}()
-	str := unsafe.Pointer(C.CString(name))
-	defer C.free(str)
-	return Attrib{Value: uint(C.glGetAttribLocation(p.c(), (*C.GLchar)(str)))}
+	s, free := ctx.cString(name)
+	defer free()
+	return Attrib{Value: uint(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGetAttribLocation,
+			a0: p.c(),
+			a1: s,
+		},
+		blocking: true,
+	}))}
 }
 
-func GetBooleanv(dst []bool, pname Enum) {
+func (ctx *context) GetBooleanv(dst []bool, pname Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetBooleanv(%v, %v) %v", dst, pname, errstr)
 	}()
-	buf := make([]C.GLboolean, len(dst))
-	C.glGetBooleanv(pname.c(), &buf[0])
+	buf := make([]int32, len(dst))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnGetBooleanv,
+			a0: pname.c(),
+		},
+		parg:     unsafe.Pointer(&buf[0]),
+		blocking: true,
+	})
 	for i, v := range buf {
 		dst[i] = v != 0
 	}
 }
 
-func GetFloatv(dst []float32, pname Enum) {
+func (ctx *context) GetFloatv(dst []float32, pname Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetFloatv(len(%d), %v) %v", len(dst), pname, errstr)
 	}()
-	C.glGetFloatv(pname.c(), (*C.GLfloat)(&dst[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnGetFloatv,
+			a0: pname.c(),
+		},
+		parg:     unsafe.Pointer(&dst[0]),
+		blocking: true,
+	})
 }
 
-func GetIntegerv(pname Enum, data []int32) {
+func (ctx *context) GetIntegerv(dst []int32, pname Enum) {
 	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.GetIntegerv(%v, %v) %v", pname, data, errstr)
+		errstr := ctx.errDrain()
+		log.Printf("gl.GetIntegerv(%v, %v) %v", dst, pname, errstr)
 	}()
-	buf := make([]C.GLint, len(data))
-	C.glGetIntegerv(pname.c(), &buf[0])
-	for i, v := range buf {
-		data[i] = int32(v)
-	}
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnGetIntegerv,
+			a0: pname.c(),
+		},
+		parg:     unsafe.Pointer(&dst[0]),
+		blocking: true,
+	})
 }
 
-func GetInteger(pname Enum) (r0 int) {
+func (ctx *context) GetInteger(pname Enum) (r0 int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetInteger(%v) %v%v", pname, r0, errstr)
 	}()
-	var v C.GLint
-	C.glGetIntegerv(pname.c(), &v)
-	return int(v)
+	var v [1]int32
+	ctx.GetIntegerv(v[:], pname)
+	return int(v[0])
 }
 
-func GetBufferParameteri(target, pname Enum) (r0 int) {
+func (ctx *context) GetBufferParameteri(target, value Enum) (r0 int) {
 	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.GetBufferParameteri(%v, %v) %v%v", target, pname, r0, errstr)
+		errstr := ctx.errDrain()
+		log.Printf("gl.GetBufferParameteri(%v, %v) %v%v", target, value, r0, errstr)
 	}()
-	var params C.GLint
-	C.glGetBufferParameteriv(target.c(), pname.c(), &params)
-	return int(params)
+	return int(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGetBufferParameteri,
+			a0: target.c(),
+			a1: value.c(),
+		},
+		blocking: true,
+	}))
 }
 
-func GetError() (r0 Enum) {
-	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.GetError() %v%v", r0, errstr)
-	}()
-	return Enum(C.glGetError())
+func (ctx *context) GetError() (r0 Enum) {
+	return Enum(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGetError,
+		},
+		blocking: true,
+	}))
 }
 
-func GetFramebufferAttachmentParameteri(target, attachment, pname Enum) (r0 int) {
+func (ctx *context) GetFramebufferAttachmentParameteri(target, attachment, pname Enum) (r0 int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetFramebufferAttachmentParameteri(%v, %v, %v) %v%v", target, attachment, pname, r0, errstr)
 	}()
-	var params C.GLint
-	C.glGetFramebufferAttachmentParameteriv(target.c(), attachment.c(), pname.c(), &params)
-	return int(params)
+	return int(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGetFramebufferAttachmentParameteriv,
+			a0: target.c(),
+			a1: attachment.c(),
+			a2: pname.c(),
+		},
+		blocking: true,
+	}))
 }
 
-func GetProgrami(p Program, pname Enum) (r0 int) {
+func (ctx *context) GetProgrami(p Program, pname Enum) (r0 int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetProgrami(%v, %v) %v%v", p, pname, r0, errstr)
 	}()
-	var params C.GLint
-	C.glGetProgramiv(p.c(), pname.c(), &params)
-	return int(params)
+	return int(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGetProgramiv,
+			a0: p.c(),
+			a1: pname.c(),
+		},
+		blocking: true,
+	}))
 }
 
-func GetProgramInfoLog(p Program) (r0 string) {
+func (ctx *context) GetProgramInfoLog(p Program) (r0 string) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetProgramInfoLog(%v) %v%v", p, r0, errstr)
 	}()
-	infoLen := GetProgrami(p, INFO_LOG_LENGTH)
-	buf := C.malloc(C.size_t(infoLen))
-	C.free(buf)
-	C.glGetProgramInfoLog(p.c(), C.GLsizei(infoLen), nil, (*C.GLchar)(buf))
-	return C.GoString((*C.char)(buf))
+	infoLen := ctx.GetProgrami(p, INFO_LOG_LENGTH)
+	if infoLen == 0 {
+		return ""
+	}
+	buf := make([]byte, infoLen)
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnGetProgramInfoLog,
+			a0: p.c(),
+			a1: uintptr(infoLen),
+		},
+		parg:     unsafe.Pointer(&buf[0]),
+		blocking: true,
+	})
+	return goString(buf)
 }
 
-func GetRenderbufferParameteri(target, pname Enum) (r0 int) {
+func (ctx *context) GetRenderbufferParameteri(target, pname Enum) (r0 int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetRenderbufferParameteri(%v, %v) %v%v", target, pname, r0, errstr)
 	}()
-	var params C.GLint
-	C.glGetRenderbufferParameteriv(target.c(), pname.c(), &params)
-	return int(params)
+	return int(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGetRenderbufferParameteriv,
+			a0: target.c(),
+			a1: pname.c(),
+		},
+		blocking: true,
+	}))
 }
 
-func GetShaderi(s Shader, pname Enum) (r0 int) {
+func (ctx *context) GetShaderi(s Shader, pname Enum) (r0 int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetShaderi(%v, %v) %v%v", s, pname, r0, errstr)
 	}()
-	var params C.GLint
-	C.glGetShaderiv(s.c(), pname.c(), &params)
-	return int(params)
+	return int(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGetShaderiv,
+			a0: s.c(),
+			a1: pname.c(),
+		},
+		blocking: true,
+	}))
 }
 
-func GetShaderInfoLog(s Shader) (r0 string) {
+func (ctx *context) GetShaderInfoLog(s Shader) (r0 string) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetShaderInfoLog(%v) %v%v", s, r0, errstr)
 	}()
-	infoLen := GetShaderi(s, INFO_LOG_LENGTH)
-	buf := C.malloc(C.size_t(infoLen))
-	defer C.free(buf)
-	C.glGetShaderInfoLog(s.c(), C.GLsizei(infoLen), nil, (*C.GLchar)(buf))
-	return C.GoString((*C.char)(buf))
+	infoLen := ctx.GetShaderi(s, INFO_LOG_LENGTH)
+	if infoLen == 0 {
+		return ""
+	}
+	buf := make([]byte, infoLen)
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnGetShaderInfoLog,
+			a0: s.c(),
+			a1: uintptr(infoLen),
+		},
+		parg:     unsafe.Pointer(&buf[0]),
+		blocking: true,
+	})
+	return goString(buf)
 }
 
-func GetShaderPrecisionFormat(shadertype, precisiontype Enum) (rangeLow, rangeHigh, precision int) {
+func (ctx *context) GetShaderPrecisionFormat(shadertype, precisiontype Enum) (rangeLow, rangeHigh, precision int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetShaderPrecisionFormat(%v, %v) (%v, %v, %v) %v", shadertype, precisiontype, rangeLow, rangeHigh, precision, errstr)
 	}()
-	const glintSize = 4
-	var cRange [2]C.GLint
-	var cPrecision C.GLint
-	C.glGetShaderPrecisionFormat(shadertype.c(), precisiontype.c(), &cRange[0], &cPrecision)
-	return int(cRange[0]), int(cRange[1]), int(cPrecision)
+	var rangeAndPrec [3]int32
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnGetShaderPrecisionFormat,
+			a0: shadertype.c(),
+			a1: precisiontype.c(),
+		},
+		parg:     unsafe.Pointer(&rangeAndPrec[0]),
+		blocking: true,
+	})
+	return int(rangeAndPrec[0]), int(rangeAndPrec[1]), int(rangeAndPrec[2])
 }
 
-func GetShaderSource(s Shader) (r0 string) {
+func (ctx *context) GetShaderSource(s Shader) (r0 string) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetShaderSource(%v) %v%v", s, r0, errstr)
 	}()
-	sourceLen := GetShaderi(s, SHADER_SOURCE_LENGTH)
+	sourceLen := ctx.GetShaderi(s, SHADER_SOURCE_LENGTH)
 	if sourceLen == 0 {
 		return ""
 	}
-	buf := C.malloc(C.size_t(sourceLen))
-	defer C.free(buf)
-	C.glGetShaderSource(s.c(), C.GLsizei(sourceLen), nil, (*C.GLchar)(buf))
-	return C.GoString((*C.char)(buf))
+	buf := make([]byte, sourceLen)
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnGetShaderSource,
+			a0: s.c(),
+			a1: uintptr(sourceLen),
+		},
+		parg:     unsafe.Pointer(&buf[0]),
+		blocking: true,
+	})
+	return goString(buf)
 }
 
-func GetString(name Enum) (r0 string) {
+func (ctx *context) GetString(pname Enum) (r0 string) {
 	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.GetString(%v) %v%v", name, r0, errstr)
+		errstr := ctx.errDrain()
+		log.Printf("gl.GetString(%v) %v%v", pname, r0, errstr)
 	}()
-	return C.GoString((*C.char)((unsafe.Pointer)(C.glGetString(name.c()))))
+	ret := ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGetString,
+			a0: pname.c(),
+		},
+		blocking: true,
+	})
+	retp := unsafe.Pointer(ret)
+	buf := (*[1 << 24]byte)(retp)[:]
+	return goString(buf)
 }
 
-func GetTexParameterfv(dst []float32, target, pname Enum) {
+func (ctx *context) GetTexParameterfv(dst []float32, target, pname Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetTexParameterfv(len(%d), %v, %v) %v", len(dst), target, pname, errstr)
 	}()
-	C.glGetTexParameterfv(target.c(), pname.c(), (*C.GLfloat)(&dst[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnGetTexParameterfv,
+			a0: target.c(),
+			a1: pname.c(),
+		},
+		parg:     unsafe.Pointer(&dst[0]),
+		blocking: true,
+	})
 }
 
-func GetTexParameteriv(dst []int32, target, pname Enum) {
+func (ctx *context) GetTexParameteriv(dst []int32, target, pname Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetTexParameteriv(%v, %v, %v) %v", dst, target, pname, errstr)
 	}()
-	C.glGetTexParameteriv(target.c(), pname.c(), (*C.GLint)(&dst[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnGetTexParameteriv,
+			a0: target.c(),
+			a1: pname.c(),
+		},
+		blocking: true,
+	})
 }
 
-func GetUniformfv(dst []float32, src Uniform, p Program) {
+func (ctx *context) GetUniformfv(dst []float32, src Uniform, p Program) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetUniformfv(len(%d), %v, %v) %v", len(dst), src, p, errstr)
 	}()
-	C.glGetUniformfv(p.c(), src.c(), (*C.GLfloat)(&dst[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnGetUniformfv,
+			a0: p.c(),
+			a1: src.c(),
+		},
+		parg:     unsafe.Pointer(&dst[0]),
+		blocking: true,
+	})
 }
 
-func GetUniformiv(dst []int32, src Uniform, p Program) {
+func (ctx *context) GetUniformiv(dst []int32, src Uniform, p Program) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetUniformiv(%v, %v, %v) %v", dst, src, p, errstr)
 	}()
-	C.glGetUniformiv(p.c(), src.c(), (*C.GLint)(&dst[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnGetUniformiv,
+			a0: p.c(),
+			a1: src.c(),
+		},
+		parg:     unsafe.Pointer(&dst[0]),
+		blocking: true,
+	})
 }
 
-func GetUniformLocation(p Program, name string) (r0 Uniform) {
+func (ctx *context) GetUniformLocation(p Program, name string) (r0 Uniform) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		r0.name = name
 		log.Printf("gl.GetUniformLocation(%v, %v) %v%v", p, name, r0, errstr)
 	}()
-	str := C.CString(name)
-	defer C.free((unsafe.Pointer)(str))
-	return Uniform{Value: int32(C.glGetUniformLocation(p.c(), (*C.GLchar)(str)))}
+	s, free := ctx.cString(name)
+	defer free()
+	return Uniform{Value: int32(ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnGetUniformLocation,
+			a0: p.c(),
+			a1: s,
+		},
+		blocking: true,
+	}))}
 }
 
-func GetVertexAttribf(src Attrib, pname Enum) (r0 float32) {
+func (ctx *context) GetVertexAttribf(src Attrib, pname Enum) (r0 float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetVertexAttribf(%v, %v) %v%v", src, pname, r0, errstr)
 	}()
-	var params C.GLfloat
-	C.glGetVertexAttribfv(src.c(), pname.c(), &params)
-	return float32(params)
+	var params [1]float32
+	ctx.GetVertexAttribfv(params[:], src, pname)
+	return params[0]
 }
 
-func GetVertexAttribfv(dst []float32, src Attrib, pname Enum) {
+func (ctx *context) GetVertexAttribfv(dst []float32, src Attrib, pname Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetVertexAttribfv(len(%d), %v, %v) %v", len(dst), src, pname, errstr)
 	}()
-	C.glGetVertexAttribfv(src.c(), pname.c(), (*C.GLfloat)(&dst[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnGetVertexAttribfv,
+			a0: src.c(),
+			a1: pname.c(),
+		},
+		parg:     unsafe.Pointer(&dst[0]),
+		blocking: true,
+	})
 }
 
-func GetVertexAttribi(src Attrib, pname Enum) (r0 int32) {
+func (ctx *context) GetVertexAttribi(src Attrib, pname Enum) (r0 int32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetVertexAttribi(%v, %v) %v%v", src, pname, r0, errstr)
 	}()
-	var params C.GLint
-	C.glGetVertexAttribiv(src.c(), pname.c(), &params)
-	return int32(params)
+	var params [1]int32
+	ctx.GetVertexAttribiv(params[:], src, pname)
+	return params[0]
 }
 
-func GetVertexAttribiv(dst []int32, src Attrib, pname Enum) {
+func (ctx *context) GetVertexAttribiv(dst []int32, src Attrib, pname Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.GetVertexAttribiv(%v, %v, %v) %v", dst, src, pname, errstr)
 	}()
-	C.glGetVertexAttribiv(src.c(), pname.c(), (*C.GLint)(&dst[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnGetVertexAttribiv,
+			a0: src.c(),
+			a1: pname.c(),
+		},
+		parg:     unsafe.Pointer(&dst[0]),
+		blocking: true,
+	})
 }
 
-func Hint(target, mode Enum) {
+func (ctx *context) Hint(target, mode Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Hint(%v, %v) %v", target, mode, errstr)
 	}()
-	C.glHint(target.c(), mode.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnHint,
+			a0: target.c(),
+			a1: mode.c(),
+		},
+		blocking: true})
 }
 
-func IsBuffer(b Buffer) (r0 bool) {
+func (ctx *context) IsBuffer(b Buffer) (r0 bool) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.IsBuffer(%v) %v%v", b, r0, errstr)
 	}()
-	return C.glIsBuffer(b.c()) != 0
+	return 0 != ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnIsBuffer,
+			a0: b.c(),
+		},
+		blocking: true,
+	})
 }
 
-func IsEnabled(cap Enum) (r0 bool) {
+func (ctx *context) IsEnabled(cap Enum) (r0 bool) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.IsEnabled(%v) %v%v", cap, r0, errstr)
 	}()
-	return C.glIsEnabled(cap.c()) != 0
+	return 0 != ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnIsEnabled,
+			a0: cap.c(),
+		},
+		blocking: true,
+	})
 }
 
-func IsFramebuffer(fb Framebuffer) (r0 bool) {
+func (ctx *context) IsFramebuffer(fb Framebuffer) (r0 bool) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.IsFramebuffer(%v) %v%v", fb, r0, errstr)
 	}()
-	return C.glIsFramebuffer(fb.c()) != 0
+	return 0 != ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnIsFramebuffer,
+			a0: fb.c(),
+		},
+		blocking: true,
+	})
 }
 
-func IsProgram(p Program) (r0 bool) {
+func (ctx *context) IsProgram(p Program) (r0 bool) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.IsProgram(%v) %v%v", p, r0, errstr)
 	}()
-	return C.glIsProgram(p.c()) != 0
+	return 0 != ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnIsProgram,
+			a0: p.c(),
+		},
+		blocking: true,
+	})
 }
 
-func IsRenderbuffer(rb Renderbuffer) (r0 bool) {
+func (ctx *context) IsRenderbuffer(rb Renderbuffer) (r0 bool) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.IsRenderbuffer(%v) %v%v", rb, r0, errstr)
 	}()
-	return C.glIsRenderbuffer(rb.c()) != 0
+	return 0 != ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnIsRenderbuffer,
+			a0: rb.c(),
+		},
+		blocking: true,
+	})
 }
 
-func IsShader(s Shader) (r0 bool) {
+func (ctx *context) IsShader(s Shader) (r0 bool) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.IsShader(%v) %v%v", s, r0, errstr)
 	}()
-	return C.glIsShader(s.c()) != 0
+	return 0 != ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnIsShader,
+			a0: s.c(),
+		},
+		blocking: true,
+	})
 }
 
-func IsTexture(t Texture) (r0 bool) {
+func (ctx *context) IsTexture(t Texture) (r0 bool) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.IsTexture(%v) %v%v", t, r0, errstr)
 	}()
-	return C.glIsTexture(t.c()) != 0
+	return 0 != ctx.enqueue(call{
+		args: fnargs{
+			fn: glfnIsTexture,
+			a0: t.c(),
+		},
+		blocking: true,
+	})
 }
 
-func LineWidth(width float32) {
+func (ctx *context) LineWidth(width float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.LineWidth(%v) %v", width, errstr)
 	}()
-	C.glLineWidth(C.GLfloat(width))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnLineWidth,
+			a0: uintptr(math.Float32bits(width)),
+		},
+		blocking: true})
 }
 
-func LinkProgram(p Program) {
+func (ctx *context) LinkProgram(p Program) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.LinkProgram(%v) %v", p, errstr)
 	}()
-	C.glLinkProgram(p.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnLinkProgram,
+			a0: p.c(),
+		},
+		blocking: true})
 }
 
-func PixelStorei(pname Enum, param int32) {
+func (ctx *context) PixelStorei(pname Enum, param int32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.PixelStorei(%v, %v) %v", pname, param, errstr)
 	}()
-	C.glPixelStorei(pname.c(), C.GLint(param))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnPixelStorei,
+			a0: pname.c(),
+			a1: uintptr(param),
+		},
+		blocking: true})
 }
 
-func PolygonOffset(factor, units float32) {
+func (ctx *context) PolygonOffset(factor, units float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.PolygonOffset(%v, %v) %v", factor, units, errstr)
 	}()
-	C.glPolygonOffset(C.GLfloat(factor), C.GLfloat(units))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnPolygonOffset,
+			a0: uintptr(math.Float32bits(factor)),
+			a1: uintptr(math.Float32bits(units)),
+		},
+		blocking: true})
 }
 
-func ReadPixels(dst []byte, x, y, width, height int, format, ty Enum) {
+func (ctx *context) ReadPixels(dst []byte, x, y, width, height int, format, ty Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.ReadPixels(len(%d), %v, %v, %v, %v, %v, %v) %v", len(dst), x, y, width, height, format, ty, errstr)
 	}()
-	C.glReadPixels(C.GLint(x), C.GLint(y), C.GLsizei(width), C.GLsizei(height), format.c(), ty.c(), unsafe.Pointer(&dst[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnReadPixels,
+
+			a0: uintptr(x),
+			a1: uintptr(y),
+			a2: uintptr(width),
+			a3: uintptr(height),
+			a4: format.c(),
+			a5: ty.c(),
+		},
+		parg:     unsafe.Pointer(&dst[0]),
+		blocking: true,
+	})
 }
 
-func ReleaseShaderCompiler() {
+func (ctx *context) ReleaseShaderCompiler() {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.ReleaseShaderCompiler() %v", errstr)
 	}()
-	C.glReleaseShaderCompiler()
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnReleaseShaderCompiler,
+		},
+		blocking: true})
 }
 
-func RenderbufferStorage(target, internalFormat Enum, width, height int) {
+func (ctx *context) RenderbufferStorage(target, internalFormat Enum, width, height int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.RenderbufferStorage(%v, %v, %v, %v) %v", target, internalFormat, width, height, errstr)
 	}()
-	C.glRenderbufferStorage(target.c(), internalFormat.c(), C.GLsizei(width), C.GLsizei(height))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnRenderbufferStorage,
+			a0: target.c(),
+			a1: internalFormat.c(),
+			a2: uintptr(width),
+			a3: uintptr(height),
+		},
+		blocking: true})
 }
 
-func SampleCoverage(value float32, invert bool) {
+func (ctx *context) SampleCoverage(value float32, invert bool) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.SampleCoverage(%v, %v) %v", value, invert, errstr)
 	}()
-	sampleCoverage(value, invert)
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnSampleCoverage,
+			a0: uintptr(math.Float32bits(value)),
+			a1: glBoolean(invert),
+		},
+		blocking: true})
 }
 
-func Scissor(x, y, width, height int32) {
+func (ctx *context) Scissor(x, y, width, height int32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Scissor(%v, %v, %v, %v) %v", x, y, width, height, errstr)
 	}()
-	C.glScissor(C.GLint(x), C.GLint(y), C.GLsizei(width), C.GLsizei(height))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnScissor,
+			a0: uintptr(x),
+			a1: uintptr(y),
+			a2: uintptr(width),
+			a3: uintptr(height),
+		},
+		blocking: true})
 }
 
-func ShaderSource(s Shader, src string) {
+func (ctx *context) ShaderSource(s Shader, src string) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.ShaderSource(%v, %v) %v", s, src, errstr)
 	}()
-	str := (*C.GLchar)(C.CString(src))
-	defer C.free(unsafe.Pointer(str))
-	C.glShaderSource(s.c(), 1, &str, nil)
+	strp, free := ctx.cStringPtr(src)
+	defer free()
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnShaderSource,
+			a0: s.c(),
+			a1: 1,
+			a2: strp,
+		},
+		blocking: true,
+	})
 }
 
-func StencilFunc(fn Enum, ref int, mask uint32) {
+func (ctx *context) StencilFunc(fn Enum, ref int, mask uint32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.StencilFunc(%v, %v, %v) %v", fn, ref, mask, errstr)
 	}()
-	C.glStencilFunc(fn.c(), C.GLint(ref), C.GLuint(mask))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnStencilFunc,
+			a0: fn.c(),
+			a1: uintptr(ref),
+			a2: uintptr(mask),
+		},
+		blocking: true})
 }
 
-func StencilFuncSeparate(face, fn Enum, ref int, mask uint32) {
+func (ctx *context) StencilFuncSeparate(face, fn Enum, ref int, mask uint32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.StencilFuncSeparate(%v, %v, %v, %v) %v", face, fn, ref, mask, errstr)
 	}()
-	C.glStencilFuncSeparate(face.c(), fn.c(), C.GLint(ref), C.GLuint(mask))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnStencilFuncSeparate,
+			a0: face.c(),
+			a1: fn.c(),
+			a2: uintptr(ref),
+			a3: uintptr(mask),
+		},
+		blocking: true})
 }
 
-func StencilMask(mask uint32) {
+func (ctx *context) StencilMask(mask uint32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.StencilMask(%v) %v", mask, errstr)
 	}()
-	C.glStencilMask(C.GLuint(mask))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnStencilMask,
+			a0: uintptr(mask),
+		},
+		blocking: true})
 }
 
-func StencilMaskSeparate(face Enum, mask uint32) {
+func (ctx *context) StencilMaskSeparate(face Enum, mask uint32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.StencilMaskSeparate(%v, %v) %v", face, mask, errstr)
 	}()
-	C.glStencilMaskSeparate(face.c(), C.GLuint(mask))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnStencilMaskSeparate,
+			a0: face.c(),
+			a1: uintptr(mask),
+		},
+		blocking: true})
 }
 
-func StencilOp(fail, zfail, zpass Enum) {
+func (ctx *context) StencilOp(fail, zfail, zpass Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.StencilOp(%v, %v, %v) %v", fail, zfail, zpass, errstr)
 	}()
-	C.glStencilOp(fail.c(), zfail.c(), zpass.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnStencilOp,
+			a0: fail.c(),
+			a1: zfail.c(),
+			a2: zpass.c(),
+		},
+		blocking: true})
 }
 
-func StencilOpSeparate(face, sfail, dpfail, dppass Enum) {
+func (ctx *context) StencilOpSeparate(face, sfail, dpfail, dppass Enum) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.StencilOpSeparate(%v, %v, %v, %v) %v", face, sfail, dpfail, dppass, errstr)
 	}()
-	C.glStencilOpSeparate(face.c(), sfail.c(), dpfail.c(), dppass.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnStencilOpSeparate,
+			a0: face.c(),
+			a1: sfail.c(),
+			a2: dpfail.c(),
+			a3: dppass.c(),
+		},
+		blocking: true})
 }
 
-func TexImage2D(target Enum, level int, width, height int, format Enum, ty Enum, data []byte) {
+func (ctx *context) TexImage2D(target Enum, level int, width, height int, format Enum, ty Enum, data []byte) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.TexImage2D(%v, %v, %v, %v, %v, %v, len(%d)) %v", target, level, width, height, format, ty, len(data), errstr)
 	}()
-	p := unsafe.Pointer(nil)
+	parg := unsafe.Pointer(nil)
 	if len(data) > 0 {
-		p = unsafe.Pointer(&data[0])
+		parg = unsafe.Pointer(&data[0])
 	}
-	C.glTexImage2D(target.c(), C.GLint(level), C.GLint(format), C.GLsizei(width), C.GLsizei(height), 0, format.c(), ty.c(), p)
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnTexImage2D,
+
+			a0: target.c(),
+			a1: uintptr(level),
+			a2: uintptr(format),
+			a3: uintptr(width),
+			a4: uintptr(height),
+			a5: format.c(),
+			a6: ty.c(),
+		},
+		parg:     parg,
+		blocking: true,
+	})
 }
 
-func TexSubImage2D(target Enum, level int, x, y, width, height int, format, ty Enum, data []byte) {
+func (ctx *context) TexSubImage2D(target Enum, level int, x, y, width, height int, format, ty Enum, data []byte) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.TexSubImage2D(%v, %v, %v, %v, %v, %v, %v, %v, len(%d)) %v", target, level, x, y, width, height, format, ty, len(data), errstr)
 	}()
-	C.glTexSubImage2D(target.c(), C.GLint(level), C.GLint(x), C.GLint(y), C.GLsizei(width), C.GLsizei(height), format.c(), ty.c(), unsafe.Pointer(&data[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnTexSubImage2D,
+
+			a0: target.c(),
+			a1: uintptr(level),
+			a2: uintptr(x),
+			a3: uintptr(y),
+			a4: uintptr(width),
+			a5: uintptr(height),
+			a6: format.c(),
+			a7: ty.c(),
+		},
+		parg:     unsafe.Pointer(&data[0]),
+		blocking: true,
+	})
 }
 
-func TexParameterf(target, pname Enum, param float32) {
+func (ctx *context) TexParameterf(target, pname Enum, param float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.TexParameterf(%v, %v, %v) %v", target, pname, param, errstr)
 	}()
-	C.glTexParameterf(target.c(), pname.c(), C.GLfloat(param))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnTexParameterf,
+			a0: target.c(),
+			a1: pname.c(),
+			a2: uintptr(math.Float32bits(param)),
+		},
+		blocking: true})
 }
 
-func TexParameterfv(target, pname Enum, params []float32) {
+func (ctx *context) TexParameterfv(target, pname Enum, params []float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.TexParameterfv(%v, %v, len(%d)) %v", target, pname, len(params), errstr)
 	}()
-	C.glTexParameterfv(target.c(), pname.c(), (*C.GLfloat)(&params[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnTexParameterfv,
+			a0: target.c(),
+			a1: pname.c(),
+		},
+		parg:     unsafe.Pointer(&params[0]),
+		blocking: true,
+	})
 }
 
-func TexParameteri(target, pname Enum, param int) {
+func (ctx *context) TexParameteri(target, pname Enum, param int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.TexParameteri(%v, %v, %v) %v", target, pname, param, errstr)
 	}()
-	C.glTexParameteri(target.c(), pname.c(), C.GLint(param))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnTexParameteri,
+			a0: target.c(),
+			a1: pname.c(),
+			a2: uintptr(param),
+		},
+		blocking: true})
 }
 
-func TexParameteriv(target, pname Enum, params []int32) {
+func (ctx *context) TexParameteriv(target, pname Enum, params []int32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.TexParameteriv(%v, %v, %v) %v", target, pname, params, errstr)
 	}()
-	C.glTexParameteriv(target.c(), pname.c(), (*C.GLint)(&params[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnTexParameteriv,
+			a0: target.c(),
+			a1: pname.c(),
+		},
+		parg:     unsafe.Pointer(&params[0]),
+		blocking: true,
+	})
 }
 
-func Uniform1f(dst Uniform, v float32) {
+func (ctx *context) Uniform1f(dst Uniform, v float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Uniform1f(%v, %v) %v", dst, v, errstr)
 	}()
-	C.glUniform1f(dst.c(), C.GLfloat(v))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform1f,
+			a0: dst.c(),
+			a1: uintptr(math.Float32bits(v)),
+		},
+		blocking: true})
 }
 
-func Uniform1fv(dst Uniform, src []float32) {
+func (ctx *context) Uniform1fv(dst Uniform, src []float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Uniform1fv(%v, len(%d)) %v", dst, len(src), errstr)
 	}()
-	C.glUniform1fv(dst.c(), C.GLsizei(len(src)), (*C.GLfloat)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform1fv,
+			a0: dst.c(),
+			a1: uintptr(len(src)),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func Uniform1i(dst Uniform, v int) {
+func (ctx *context) Uniform1i(dst Uniform, v int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Uniform1i(%v, %v) %v", dst, v, errstr)
 	}()
-	C.glUniform1i(dst.c(), C.GLint(v))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform1i,
+			a0: dst.c(),
+			a1: uintptr(v),
+		},
+		blocking: true})
 }
 
-func Uniform1iv(dst Uniform, src []int32) {
+func (ctx *context) Uniform1iv(dst Uniform, src []int32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Uniform1iv(%v, %v) %v", dst, src, errstr)
 	}()
-	C.glUniform1iv(dst.c(), C.GLsizei(len(src)), (*C.GLint)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform1iv,
+			a0: dst.c(),
+			a1: uintptr(len(src)),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func Uniform2f(dst Uniform, v0, v1 float32) {
+func (ctx *context) Uniform2f(dst Uniform, v0, v1 float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Uniform2f(%v, %v, %v) %v", dst, v0, v1, errstr)
 	}()
-	C.glUniform2f(dst.c(), C.GLfloat(v0), C.GLfloat(v1))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform2f,
+			a0: dst.c(),
+			a1: uintptr(math.Float32bits(v0)),
+			a2: uintptr(math.Float32bits(v1)),
+		},
+		blocking: true})
 }
 
-func Uniform2fv(dst Uniform, src []float32) {
+func (ctx *context) Uniform2fv(dst Uniform, src []float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Uniform2fv(%v, len(%d)) %v", dst, len(src), errstr)
 	}()
-	C.glUniform2fv(dst.c(), C.GLsizei(len(src)/2), (*C.GLfloat)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform2fv,
+			a0: dst.c(),
+			a1: uintptr(len(src) / 2),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func Uniform2i(location, v0, v1 int) {
+func (ctx *context) Uniform2i(dst Uniform, v0, v1 int) {
 	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.Uniform2i(%v, %v, %v) %v", location, v0, v1, errstr)
+		errstr := ctx.errDrain()
+		log.Printf("gl.Uniform2i(%v, %v, %v) %v", dst, v0, v1, errstr)
 	}()
-	C.glUniform2i(C.GLint(location), C.GLint(v0), C.GLint(v1))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform2i,
+			a0: dst.c(),
+			a1: uintptr(v0),
+			a2: uintptr(v1),
+		},
+		blocking: true})
 }
 
-func Uniform2iv(dst Uniform, src []int32) {
+func (ctx *context) Uniform2iv(dst Uniform, src []int32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Uniform2iv(%v, %v) %v", dst, src, errstr)
 	}()
-	C.glUniform2iv(dst.c(), C.GLsizei(len(src)/2), (*C.GLint)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform2iv,
+			a0: dst.c(),
+			a1: uintptr(len(src) / 2),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func Uniform3f(dst Uniform, v0, v1, v2 float32) {
+func (ctx *context) Uniform3f(dst Uniform, v0, v1, v2 float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Uniform3f(%v, %v, %v, %v) %v", dst, v0, v1, v2, errstr)
 	}()
-	C.glUniform3f(dst.c(), C.GLfloat(v0), C.GLfloat(v1), C.GLfloat(v2))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform3f,
+			a0: dst.c(),
+			a1: uintptr(math.Float32bits(v0)),
+			a2: uintptr(math.Float32bits(v1)),
+			a3: uintptr(math.Float32bits(v2)),
+		},
+		blocking: true})
 }
 
-func Uniform3fv(dst Uniform, src []float32) {
+func (ctx *context) Uniform3fv(dst Uniform, src []float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Uniform3fv(%v, len(%d)) %v", dst, len(src), errstr)
 	}()
-	C.glUniform3fv(dst.c(), C.GLsizei(len(src)/3), (*C.GLfloat)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform3fv,
+			a0: dst.c(),
+			a1: uintptr(len(src) / 3),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func Uniform3i(location, v0, v1, v2 int32) {
+func (ctx *context) Uniform3i(dst Uniform, v0, v1, v2 int32) {
 	defer func() {
-		errstr := errDrain()
-		log.Printf("gl.Uniform3i(%v, %v, %v, %v) %v", location, v0, v1, v2, errstr)
+		errstr := ctx.errDrain()
+		log.Printf("gl.Uniform3i(%v, %v, %v, %v) %v", dst, v0, v1, v2, errstr)
 	}()
-	C.glUniform3i(C.GLint(location), C.GLint(v0), C.GLint(v1), C.GLint(v2))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform3i,
+			a0: dst.c(),
+			a1: uintptr(v0),
+			a2: uintptr(v1),
+			a3: uintptr(v2),
+		},
+		blocking: true})
 }
 
-func Uniform3iv(dst Uniform, src []int32) {
+func (ctx *context) Uniform3iv(dst Uniform, src []int32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Uniform3iv(%v, %v) %v", dst, src, errstr)
 	}()
-	C.glUniform3iv(dst.c(), C.GLsizei(len(src)/3), (*C.GLint)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform3iv,
+			a0: dst.c(),
+			a1: uintptr(len(src) / 3),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func Uniform4f(dst Uniform, v0, v1, v2, v3 float32) {
+func (ctx *context) Uniform4f(dst Uniform, v0, v1, v2, v3 float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Uniform4f(%v, %v, %v, %v, %v) %v", dst, v0, v1, v2, v3, errstr)
 	}()
-	C.glUniform4f(dst.c(), C.GLfloat(v0), C.GLfloat(v1), C.GLfloat(v2), C.GLfloat(v3))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform4f,
+			a0: dst.c(),
+			a1: uintptr(math.Float32bits(v0)),
+			a2: uintptr(math.Float32bits(v1)),
+			a3: uintptr(math.Float32bits(v2)),
+			a4: uintptr(math.Float32bits(v3)),
+		},
+		blocking: true})
 }
 
-func Uniform4fv(dst Uniform, src []float32) {
+func (ctx *context) Uniform4fv(dst Uniform, src []float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Uniform4fv(%v, len(%d)) %v", dst, len(src), errstr)
 	}()
-	C.glUniform4fv(dst.c(), C.GLsizei(len(src)/4), (*C.GLfloat)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform4fv,
+			a0: dst.c(),
+			a1: uintptr(len(src) / 4),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func Uniform4i(dst Uniform, v0, v1, v2, v3 int32) {
+func (ctx *context) Uniform4i(dst Uniform, v0, v1, v2, v3 int32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Uniform4i(%v, %v, %v, %v, %v) %v", dst, v0, v1, v2, v3, errstr)
 	}()
-	C.glUniform4i(dst.c(), C.GLint(v0), C.GLint(v1), C.GLint(v2), C.GLint(v3))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform4i,
+			a0: dst.c(),
+			a1: uintptr(v0),
+			a2: uintptr(v1),
+			a3: uintptr(v2),
+			a4: uintptr(v3),
+		},
+		blocking: true})
 }
 
-func Uniform4iv(dst Uniform, src []int32) {
+func (ctx *context) Uniform4iv(dst Uniform, src []int32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Uniform4iv(%v, %v) %v", dst, src, errstr)
 	}()
-	C.glUniform4iv(dst.c(), C.GLsizei(len(src)/4), (*C.GLint)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniform4iv,
+			a0: dst.c(),
+			a1: uintptr(len(src) / 4),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func UniformMatrix2fv(dst Uniform, src []float32) {
+func (ctx *context) UniformMatrix2fv(dst Uniform, src []float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.UniformMatrix2fv(%v, len(%d)) %v", dst, len(src), errstr)
 	}()
-	C.glUniformMatrix2fv(dst.c(), C.GLsizei(len(src)/4), 0, (*C.GLfloat)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniformMatrix2fv,
+
+			a0: dst.c(),
+			a1: uintptr(len(src) / 4),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func UniformMatrix3fv(dst Uniform, src []float32) {
+func (ctx *context) UniformMatrix3fv(dst Uniform, src []float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.UniformMatrix3fv(%v, len(%d)) %v", dst, len(src), errstr)
 	}()
-	C.glUniformMatrix3fv(dst.c(), C.GLsizei(len(src)/9), 0, (*C.GLfloat)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniformMatrix3fv,
+			a0: dst.c(),
+			a1: uintptr(len(src) / 9),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func UniformMatrix4fv(dst Uniform, src []float32) {
+func (ctx *context) UniformMatrix4fv(dst Uniform, src []float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.UniformMatrix4fv(%v, len(%d)) %v", dst, len(src), errstr)
 	}()
-	C.glUniformMatrix4fv(dst.c(), C.GLsizei(len(src)/16), 0, (*C.GLfloat)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUniformMatrix4fv,
+			a0: dst.c(),
+			a1: uintptr(len(src) / 16),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func UseProgram(p Program) {
+func (ctx *context) UseProgram(p Program) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.UseProgram(%v) %v", p, errstr)
 	}()
-	C.glUseProgram(p.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnUseProgram,
+			a0: p.c(),
+		},
+		blocking: true})
 }
 
-func ValidateProgram(p Program) {
+func (ctx *context) ValidateProgram(p Program) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.ValidateProgram(%v) %v", p, errstr)
 	}()
-	C.glValidateProgram(p.c())
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnValidateProgram,
+			a0: p.c(),
+		},
+		blocking: true})
 }
 
-func VertexAttrib1f(dst Attrib, x float32) {
+func (ctx *context) VertexAttrib1f(dst Attrib, x float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.VertexAttrib1f(%v, %v) %v", dst, x, errstr)
 	}()
-	C.glVertexAttrib1f(dst.c(), C.GLfloat(x))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnVertexAttrib1f,
+			a0: dst.c(),
+			a1: uintptr(math.Float32bits(x)),
+		},
+		blocking: true})
 }
 
-func VertexAttrib1fv(dst Attrib, src []float32) {
+func (ctx *context) VertexAttrib1fv(dst Attrib, src []float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.VertexAttrib1fv(%v, len(%d)) %v", dst, len(src), errstr)
 	}()
-	C.glVertexAttrib1fv(dst.c(), (*C.GLfloat)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnVertexAttrib1fv,
+			a0: dst.c(),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func VertexAttrib2f(dst Attrib, x, y float32) {
+func (ctx *context) VertexAttrib2f(dst Attrib, x, y float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.VertexAttrib2f(%v, %v, %v) %v", dst, x, y, errstr)
 	}()
-	C.glVertexAttrib2f(dst.c(), C.GLfloat(x), C.GLfloat(y))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnVertexAttrib2f,
+			a0: dst.c(),
+			a1: uintptr(math.Float32bits(x)),
+			a2: uintptr(math.Float32bits(y)),
+		},
+		blocking: true})
 }
 
-func VertexAttrib2fv(dst Attrib, src []float32) {
+func (ctx *context) VertexAttrib2fv(dst Attrib, src []float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.VertexAttrib2fv(%v, len(%d)) %v", dst, len(src), errstr)
 	}()
-	C.glVertexAttrib2fv(dst.c(), (*C.GLfloat)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnVertexAttrib2fv,
+			a0: dst.c(),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func VertexAttrib3f(dst Attrib, x, y, z float32) {
+func (ctx *context) VertexAttrib3f(dst Attrib, x, y, z float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.VertexAttrib3f(%v, %v, %v, %v) %v", dst, x, y, z, errstr)
 	}()
-	C.glVertexAttrib3f(dst.c(), C.GLfloat(x), C.GLfloat(y), C.GLfloat(z))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnVertexAttrib3f,
+			a0: dst.c(),
+			a1: uintptr(math.Float32bits(x)),
+			a2: uintptr(math.Float32bits(y)),
+			a3: uintptr(math.Float32bits(z)),
+		},
+		blocking: true})
 }
 
-func VertexAttrib3fv(dst Attrib, src []float32) {
+func (ctx *context) VertexAttrib3fv(dst Attrib, src []float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.VertexAttrib3fv(%v, len(%d)) %v", dst, len(src), errstr)
 	}()
-	C.glVertexAttrib3fv(dst.c(), (*C.GLfloat)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnVertexAttrib3fv,
+			a0: dst.c(),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func VertexAttrib4f(dst Attrib, x, y, z, w float32) {
+func (ctx *context) VertexAttrib4f(dst Attrib, x, y, z, w float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.VertexAttrib4f(%v, %v, %v, %v, %v) %v", dst, x, y, z, w, errstr)
 	}()
-	C.glVertexAttrib4f(dst.c(), C.GLfloat(x), C.GLfloat(y), C.GLfloat(z), C.GLfloat(w))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnVertexAttrib4f,
+			a0: dst.c(),
+			a1: uintptr(math.Float32bits(x)),
+			a2: uintptr(math.Float32bits(y)),
+			a3: uintptr(math.Float32bits(z)),
+			a4: uintptr(math.Float32bits(w)),
+		},
+		blocking: true})
 }
 
-func VertexAttrib4fv(dst Attrib, src []float32) {
+func (ctx *context) VertexAttrib4fv(dst Attrib, src []float32) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.VertexAttrib4fv(%v, len(%d)) %v", dst, len(src), errstr)
 	}()
-	C.glVertexAttrib4fv(dst.c(), (*C.GLfloat)(&src[0]))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnVertexAttrib4fv,
+			a0: dst.c(),
+		},
+		parg:     unsafe.Pointer(&src[0]),
+		blocking: true,
+	})
 }
 
-func VertexAttribPointer(dst Attrib, size int, ty Enum, normalized bool, stride, offset int) {
+func (ctx *context) VertexAttribPointer(dst Attrib, size int, ty Enum, normalized bool, stride, offset int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.VertexAttribPointer(%v, %v, %v, %v, %v, %v) %v", dst, size, ty, normalized, stride, offset, errstr)
 	}()
-	n := glBoolean(normalized)
-	s := C.GLsizei(stride)
-	C.glVertexAttribPointer(dst.c(), C.GLint(size), ty.c(), n, s, unsafe.Pointer(uintptr(offset)))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnVertexAttribPointer,
+			a0: dst.c(),
+			a1: uintptr(size),
+			a2: ty.c(),
+			a3: glBoolean(normalized),
+			a4: uintptr(stride),
+			a5: uintptr(offset),
+		},
+		blocking: true})
 }
 
-func Viewport(x, y, width, height int) {
+func (ctx *context) Viewport(x, y, width, height int) {
 	defer func() {
-		errstr := errDrain()
+		errstr := ctx.errDrain()
 		log.Printf("gl.Viewport(%v, %v, %v, %v) %v", x, y, width, height, errstr)
 	}()
-	C.glViewport(C.GLint(x), C.GLint(y), C.GLsizei(width), C.GLsizei(height))
+	ctx.enqueueDebug(call{
+		args: fnargs{
+			fn: glfnViewport,
+			a0: uintptr(x),
+			a1: uintptr(y),
+			a2: uintptr(width),
+			a3: uintptr(height),
+		},
+		blocking: true})
 }

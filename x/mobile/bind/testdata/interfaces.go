@@ -19,3 +19,37 @@ type seven struct{}
 func (seven) Rand() int32 { return 7 }
 
 func Seven() I { return seven{} }
+
+type WithParam interface {
+	HasParam(p bool)
+}
+
+type Error interface {
+	Err() error
+}
+
+func CallErr(e Error) error {
+	return e.Err()
+}
+
+// not implementable
+type I1 interface {
+	J()
+	H() *seven // not bound
+}
+
+// not implementable
+type I2 interface {
+	f()
+	G()
+}
+
+// implementable
+// (the implementor has to find a source of I1s)
+type I3 interface {
+	F() I1
+}
+
+// not bound
+func F() seven  { return seven{} }
+func G(u seven) {}

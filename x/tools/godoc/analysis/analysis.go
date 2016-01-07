@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 // Package analysis performs type and pointer analysis
 // and generates mark-up for the Go source view.
 //
@@ -45,8 +47,10 @@ package analysis // import "golang.org/x/tools/godoc/analysis"
 import (
 	"fmt"
 	"go/build"
+	exact "go/constant"
 	"go/scanner"
 	"go/token"
+	"go/types"
 	"html"
 	"io"
 	"log"
@@ -61,7 +65,6 @@ import (
 	"golang.org/x/tools/go/pointer"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
-	"golang.org/x/tools/go/types"
 )
 
 // -- links ------------------------------------------------------------
@@ -337,8 +340,7 @@ func (a *analysis) posURL(pos token.Pos, len int) string {
 //
 func Run(pta bool, result *Result) {
 	conf := loader.Config{
-		SourceImports: true,
-		AllowErrors:   true,
+		AllowErrors: true,
 	}
 
 	// Silence the default error handler.
@@ -393,16 +395,19 @@ func Run(pta bool, result *Result) {
 
 	// Create SSA-form program representation.
 	// Only the transitively error-free packages are used.
-	prog := ssa.Create(iprog, ssa.GlobalDebug)
+	prog := ssautil.CreateProgram(iprog, ssa.GlobalDebug)
 
 	// Compute the set of main packages, including testmain.
 	allPackages := prog.AllPackages()
 	var mainPkgs []*ssa.Package
 	if testmain := prog.CreateTestMainPackage(allPackages...); testmain != nil {
 		mainPkgs = append(mainPkgs, testmain)
+		if p := testmain.Const("packages"); p != nil {
+			log.Printf("Tested packages: %v", exact.StringVal(p.Value.Value))
+		}
 	}
 	for _, pkg := range allPackages {
-		if pkg.Object.Name() == "main" && pkg.Func("main") != nil {
+		if pkg.Pkg.Name() == "main" && pkg.Func("main") != nil {
 			mainPkgs = append(mainPkgs, pkg)
 		}
 	}
@@ -410,7 +415,7 @@ func Run(pta bool, result *Result) {
 
 	// Build SSA code for bodies of all functions in the whole program.
 	result.setStatusf("Constructing SSA form...")
-	prog.BuildAll()
+	prog.Build()
 	log.Print("SSA construction complete")
 
 	a := analysis{

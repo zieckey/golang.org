@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package analysis
 
 // This file computes the channel "peers" relation over all pairs of
@@ -14,10 +16,10 @@ package analysis
 import (
 	"fmt"
 	"go/token"
+	"go/types"
 
 	"golang.org/x/tools/go/pointer"
 	"golang.org/x/tools/go/ssa"
-	"golang.org/x/tools/go/types"
 )
 
 func (a *analysis) doChannelPeers(ptsets map[ssa.Value]pointer.Pointer) {
@@ -72,7 +74,7 @@ func (a *analysis) doChannelPeers(ptsets map[ssa.Value]pointer.Pointer) {
 					Href: a.posURL(makechan.Pos()-token.Pos(len("make")),
 						len("make")),
 				},
-				Fn: makechan.Parent().RelString(op.fn.Package().Object),
+				Fn: makechan.Parent().RelString(op.fn.Package().Pkg),
 			})
 			for _, op := range aliasedOps[makechan] {
 				ops[op] = true

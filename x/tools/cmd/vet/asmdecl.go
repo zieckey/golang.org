@@ -60,6 +60,7 @@ type asmVar struct {
 var (
 	asmArch386       = asmArch{"386", 4, 4, 4, false, "SP", false}
 	asmArchArm       = asmArch{"arm", 4, 4, 4, false, "R13", true}
+	asmArchArm64     = asmArch{"arm64", 8, 8, 8, false, "RSP", true}
 	asmArchAmd64     = asmArch{"amd64", 8, 8, 8, false, "SP", false}
 	asmArchAmd64p32  = asmArch{"amd64p32", 4, 4, 8, false, "SP", false}
 	asmArchPower64   = asmArch{"power64", 8, 8, 8, true, "R1", true}
@@ -68,6 +69,7 @@ var (
 	arches = []*asmArch{
 		&asmArch386,
 		&asmArchArm,
+		&asmArchArm64,
 		&asmArchAmd64,
 		&asmArchAmd64p32,
 		&asmArchPower64,
@@ -81,7 +83,7 @@ var (
 	asmTEXT      = re(`\bTEXT\b.*·([^\(]+)\(SB\)(?:\s*,\s*([0-9A-Z|+]+))?(?:\s*,\s*\$(-?[0-9]+)(?:-([0-9]+))?)?`)
 	asmDATA      = re(`\b(DATA|GLOBL)\b`)
 	asmNamedFP   = re(`([a-zA-Z0-9_\xFF-\x{10FFFF}]+)(?:\+([0-9]+))\(FP\)`)
-	asmUnnamedFP = re(`[^+\-0-9]](([0-9]+)\(FP\))`)
+	asmUnnamedFP = re(`[^+\-0-9](([0-9]+)\(FP\))`)
 	asmSP        = re(`[^+\-0-9](([0-9]+)\(([A-Z0-9]+)\))`)
 	asmOpcode    = re(`^\s*(?:[A-Z0-9a-z_]+:)?\s*([A-Z]+)\s*([^,]*)(?:,\s*(.*))?`)
 	power64Suff  = re(`([BHWD])(ZU|Z|U|BR)?$`)
@@ -110,6 +112,7 @@ func asmCheck(pkg *Package) {
 		}
 	}
 
+Files:
 	for _, f := range pkg.files {
 		if !strings.HasSuffix(f.name, ".s") {
 			continue
@@ -173,7 +176,7 @@ func asmCheck(pkg *Package) {
 				flushRet()
 				if arch == "" {
 					f.Warnf(token.NoPos, "%s: cannot determine architecture for assembly file", f.name)
-					return
+					continue Files
 				}
 				fnName = m[1]
 				fn = knownFunc[m[1]][arch]
@@ -190,6 +193,9 @@ func asmCheck(pkg *Package) {
 					localSize += archDef.intSize
 				}
 				argSize, _ = strconv.Atoi(m[4])
+				if fn == nil && !strings.Contains(fnName, "<>") {
+					badf("function %s missing Go declaration", fnName)
+				}
 				wroteSP = false
 				haveRetArg = false
 				continue
@@ -251,7 +257,13 @@ func asmCheck(pkg *Package) {
 			}
 
 			for _, m := range asmUnnamedFP.FindAllStringSubmatch(line, -1) {
-				badf("use of unnamed argument %s", m[1])
+				off, _ := strconv.Atoi(m[2])
+				v := fn.varByOffset[off]
+				if v != nil {
+					badf("use of unnamed argument %s; offset %d is %s+%d(FP)", m[1], off, v.name, v.off)
+				} else {
+					badf("use of unnamed argument %s", m[1])
+				}
 			}
 
 			for _, m := range asmNamedFP.FindAllStringSubmatch(line, -1) {

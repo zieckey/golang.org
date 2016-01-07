@@ -13,7 +13,7 @@ import (
 )
 
 // newCollator creates a new collator with default options configured.
-func newCollator(t colltab.Weigher) *Collator {
+func newCollator(t colltab.Weighter) *Collator {
 	// Initialize a collator with default options.
 	c := &Collator{
 		options: options{
@@ -25,8 +25,6 @@ func newCollator(t colltab.Weigher) *Collator {
 			t: t,
 		},
 	}
-	c._iter[0].init(c)
-	c._iter[1].init(c)
 
 	// TODO: store vt in tags or remove.
 	c.variableTop = t.Top()
@@ -70,6 +68,7 @@ type options struct {
 	// numeric specifies whether any sequence of decimal digits (category is Nd)
 	// is sorted at a primary level with its numeric value.
 	// For example, "A-21" < "A-123".
+	// This option is set by wrapping the main Weighter with NewNumericWeighter.
 	numeric bool
 
 	// alternate specifies an alternative handling of variables.
@@ -79,7 +78,7 @@ type options struct {
 	// variable.
 	variableTop uint32
 
-	t colltab.Weigher
+	t colltab.Weighter
 
 	f norm.Form
 }

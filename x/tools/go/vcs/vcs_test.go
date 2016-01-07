@@ -8,12 +8,19 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 )
 
 // Test that RepoRootForImportPath creates the correct RepoRoot for a given importPath.
 // TODO(cmang): Add tests for SVN and BZR.
 func TestRepoRootForImportPath(t *testing.T) {
+	if runtime.GOOS == "android" {
+		t.Skipf("incomplete source tree on %s", runtime.GOOS)
+	}
+
 	tests := []struct {
 		path string
 		want *RepoRoot
@@ -82,5 +89,47 @@ func TestFromDir(t *testing.T) {
 			t.Errorf("FromDir(%q, %q) = %s, want %s", test.path, tempDir, got, test.want)
 		}
 		os.RemoveAll(test.path)
+	}
+}
+
+var parseMetaGoImportsTests = []struct {
+	in  string
+	out []metaImport
+}{
+	{
+		`<meta name="go-import" content="foo/bar git https://github.com/rsc/foo/bar">`,
+		[]metaImport{{"foo/bar", "git", "https://github.com/rsc/foo/bar"}},
+	},
+	{
+		`<meta name="go-import" content="foo/bar git https://github.com/rsc/foo/bar">
+		<meta name="go-import" content="baz/quux git http://github.com/rsc/baz/quux">`,
+		[]metaImport{
+			{"foo/bar", "git", "https://github.com/rsc/foo/bar"},
+			{"baz/quux", "git", "http://github.com/rsc/baz/quux"},
+		},
+	},
+	{
+		`<head>
+		<meta name="go-import" content="foo/bar git https://github.com/rsc/foo/bar">
+		</head>`,
+		[]metaImport{{"foo/bar", "git", "https://github.com/rsc/foo/bar"}},
+	},
+	{
+		`<meta name="go-import" content="foo/bar git https://github.com/rsc/foo/bar">
+		<body>`,
+		[]metaImport{{"foo/bar", "git", "https://github.com/rsc/foo/bar"}},
+	},
+}
+
+func TestParseMetaGoImports(t *testing.T) {
+	for i, tt := range parseMetaGoImportsTests {
+		out, err := parseMetaGoImports(strings.NewReader(tt.in))
+		if err != nil {
+			t.Errorf("test#%d: %v", i, err)
+			continue
+		}
+		if !reflect.DeepEqual(out, tt.out) {
+			t.Errorf("test#%d:\n\thave %q\n\twant %q", i, out, tt.out)
+		}
 	}
 }

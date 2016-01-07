@@ -75,6 +75,35 @@ func TestMakeString(t *testing.T) {
 	}
 }
 
+func TestCompactIndex(t *testing.T) {
+	tests := []struct {
+		tag   string
+		index int
+		ok    bool
+	}{
+		// TODO: these values will change with each CLDR update. This issue
+		// will be solved if we decide to fix the indexes.
+		{"und", 0, true},
+		{"ca-ES-valencia", 1, true},
+		{"ca-ES-valencia-u-va-posix", 0, false},
+		{"ca-ES-valencia-u-co-phonebk", 1, true},
+		{"ca-ES-valencia-u-co-phonebk-va-posix", 0, false},
+		{"x-klingon", 0, false},
+		{"en-US", 225, true},
+		{"en-US-u-va-posix", 2, true},
+		{"en", 129, true},
+		{"en-u-co-phonebk", 129, true},
+		{"en-001", 130, true},
+		{"sh", 0, false}, // We don't normalize.
+	}
+	for _, tt := range tests {
+		x, ok := CompactIndex(Raw.MustParse(tt.tag))
+		if x != tt.index || ok != tt.ok {
+			t.Errorf("%s: got %d, %v; want %d %v", tt.tag, x, ok, tt.index, tt.ok)
+		}
+	}
+}
+
 func TestBase(t *testing.T) {
 	tests := []struct {
 		loc, lang string
@@ -459,27 +488,6 @@ func TestRegionTLD(t *testing.T) {
 	}
 }
 
-func TestParseCurrency(t *testing.T) {
-	tests := []struct {
-		in  string
-		out string
-		ok  bool
-	}{
-		{"USD", "USD", true},
-		{"xxx", "XXX", true},
-		{"xts", "XTS", true},
-		{"XX", "XXX", false},
-		{"XXXX", "XXX", false},
-		{"", "XXX", false},
-		{"UUU", "XXX", false}, // unknown
-	}
-	for i, tt := range tests {
-		if x, err := ParseCurrency(tt.in); x.String() != tt.out || err == nil != tt.ok {
-			t.Errorf("%d:%s: was %s, %v; want %s, %v", i, tt.in, x, err == nil, tt.out, tt.ok)
-		}
-	}
-}
-
 func TestCanonicalize(t *testing.T) {
 	// TODO: do a full test using CLDR data in a separate regression test.
 	tests := []struct {
@@ -513,12 +521,22 @@ func TestCanonicalize(t *testing.T) {
 		{"und-YD", "und-YD", DeprecatedBase},
 		{"und-Qaai", "und-Zinh", DeprecatedScript},
 		{"und-Qaai", "und-Qaai", DeprecatedBase},
+		{"drh", "mn", All}, // drh -> khk -> mn
 	}
 	for i, tt := range tests {
 		in, _ := Raw.Parse(tt.in)
 		in, _ = tt.option.Canonicalize(in)
 		if in.String() != tt.out {
 			t.Errorf("%d:%s: was %s; want %s", i, tt.in, in.String(), tt.out)
+		}
+	}
+	// Test idempotence.
+	for _, base := range Supported.BaseLanguages() {
+		tag, _ := Raw.Compose(base)
+		got, _ := All.Canonicalize(tag)
+		want, _ := All.Canonicalize(got)
+		if got != want {
+			t.Errorf("idem(%s): got %s; want %s", tag, got, want)
 		}
 	}
 }
@@ -694,21 +712,21 @@ func TestParent(t *testing.T) {
 		// extra
 		{"nl-Cyrl", "und"},
 
-		// World english inherits from en-GB.
-		{"en-150", "en-GB"},
-		{"en-AU", "en-GB"},
-		{"en-BE", "en-GB"},
-		{"en-GG", "en-GB"},
-		{"en-GI", "en-GB"},
-		{"en-HK", "en-GB"},
-		{"en-IE", "en-GB"},
-		{"en-IM", "en-GB"},
-		{"en-IN", "en-GB"},
-		{"en-JE", "en-GB"},
-		{"en-MT", "en-GB"},
-		{"en-NZ", "en-GB"},
-		{"en-PK", "en-GB"},
-		{"en-SG", "en-GB"},
+		// World english inherits from en-001.
+		{"en-150", "en-001"},
+		{"en-AU", "en-001"},
+		{"en-BE", "en-001"},
+		{"en-GG", "en-001"},
+		{"en-GI", "en-001"},
+		{"en-HK", "en-001"},
+		{"en-IE", "en-001"},
+		{"en-IM", "en-001"},
+		{"en-IN", "en-001"},
+		{"en-JE", "en-001"},
+		{"en-MT", "en-001"},
+		{"en-NZ", "en-001"},
+		{"en-PK", "en-001"},
+		{"en-SG", "en-001"},
 
 		// Spanish in Latin-American countries have es-419 as parent.
 		{"es-AR", "es-419"},

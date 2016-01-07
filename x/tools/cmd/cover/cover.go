@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 const usageMessage = "" +
@@ -220,6 +221,11 @@ func (f *File) Visit(node ast.Node) ast.Visitor {
 		if n.Body == nil || len(n.Body.List) == 0 {
 			return nil
 		}
+	case *ast.TypeSwitchStmt:
+		// Don't annotate an empty type switch - creates a syntax error.
+		if n.Body == nil || len(n.Body.List) == 0 {
+			return nil
+		}
 	}
 	return f
 }
@@ -324,10 +330,11 @@ func annotate(name string) {
 	if err != nil {
 		log.Fatalf("cover: %s: %s", name, err)
 	}
-	parsedFile, err := parser.ParseFile(fset, name, content, 0)
+	parsedFile, err := parser.ParseFile(fset, name, content, parser.ParseComments)
 	if err != nil {
 		log.Fatalf("cover: %s: %s", name, err)
 	}
+	parsedFile.Comments = trimComments(parsedFile, fset)
 
 	file := &File{
 		fset:    fset,
@@ -351,6 +358,26 @@ func annotate(name string) {
 	// After printing the source tree, add some declarations for the counters etc.
 	// We could do this by adding to the tree, but it's easier just to print the text.
 	file.addVariables(fd)
+}
+
+// trimComments drops all but the //go: comments, some of which are semantically important.
+// We drop all others because they can appear in places that cause our counters
+// to appear in syntactically incorrect places. //go: appears at the beginning of
+// the line and is syntactically safe.
+func trimComments(file *ast.File, fset *token.FileSet) []*ast.CommentGroup {
+	var comments []*ast.CommentGroup
+	for _, group := range file.Comments {
+		var list []*ast.Comment
+		for _, comment := range group.List {
+			if strings.HasPrefix(comment.Text, "//go:") && fset.Position(comment.Slash).Column == 1 {
+				list = append(list, comment)
+			}
+		}
+		if list != nil {
+			comments = append(comments, &ast.CommentGroup{list})
+		}
+	}
+	return comments
 }
 
 func (f *File) print(w io.Writer) {
@@ -476,6 +503,9 @@ func (f *File) addCounters(pos, blockEnd token.Pos, list []ast.Stmt, extendToClo
 // Therefore we draw a line at the start of the body of the first function literal we find.
 // TODO: what if there's more than one? Probably doesn't matter much.
 func hasFuncLiteral(n ast.Node) (bool, token.Pos) {
+	if n == nil {
+		return false, 0
+	}
 	var literal funcLitFinder
 	ast.Walk(&literal, n)
 	return literal.found(), token.Pos(literal)
@@ -490,24 +520,54 @@ func (f *File) statementBoundary(s ast.Stmt) token.Pos {
 		// Treat blocks like basic blocks to avoid overlapping counters.
 		return s.Lbrace
 	case *ast.IfStmt:
+		found, pos := hasFuncLiteral(s.Init)
+		if found {
+			return pos
+		}
+		found, pos = hasFuncLiteral(s.Cond)
+		if found {
+			return pos
+		}
 		return s.Body.Lbrace
 	case *ast.ForStmt:
+		found, pos := hasFuncLiteral(s.Init)
+		if found {
+			return pos
+		}
+		found, pos = hasFuncLiteral(s.Cond)
+		if found {
+			return pos
+		}
+		found, pos = hasFuncLiteral(s.Post)
+		if found {
+			return pos
+		}
 		return s.Body.Lbrace
 	case *ast.LabeledStmt:
 		return f.statementBoundary(s.Stmt)
 	case *ast.RangeStmt:
-		// Ranges might loop over things with function literals.: for _ = range []func(){ ... } {.
-		// TODO: There are a few other such possibilities, but they're extremely unlikely.
 		found, pos := hasFuncLiteral(s.X)
 		if found {
 			return pos
 		}
 		return s.Body.Lbrace
 	case *ast.SwitchStmt:
+		found, pos := hasFuncLiteral(s.Init)
+		if found {
+			return pos
+		}
+		found, pos = hasFuncLiteral(s.Tag)
+		if found {
+			return pos
+		}
 		return s.Body.Lbrace
 	case *ast.SelectStmt:
 		return s.Body.Lbrace
 	case *ast.TypeSwitchStmt:
+		found, pos := hasFuncLiteral(s.Init)
+		if found {
+			return pos
+		}
 		return s.Body.Lbrace
 	}
 	// If not a control flow statement, it is a declaration, expression, call, etc. and it may have a function literal.
@@ -545,6 +605,16 @@ func (f *File) endsBasicSourceBlock(s ast.Stmt) bool {
 		return true
 	case *ast.TypeSwitchStmt:
 		return true
+	case *ast.ExprStmt:
+		// Calls to panic change the flow.
+		// We really should verify that "panic" is the predefined function,
+		// but without type checking we can't and the likelihood of it being
+		// an actual problem is vanishingly small.
+		if call, ok := s.X.(*ast.CallExpr); ok {
+			if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "panic" && len(call.Args) == 1 {
+				return true
+			}
+		}
 	}
 	found, _ := hasFuncLiteral(s)
 	return found

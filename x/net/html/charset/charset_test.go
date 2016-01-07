@@ -6,6 +6,7 @@ package charset
 
 import (
 	"bytes"
+	"encoding/xml"
 	"io/ioutil"
 	"runtime"
 	"strings"
@@ -20,9 +21,12 @@ func transformString(t transform.Transformer, s string) (string, error) {
 	return string(b), err
 }
 
-var testCases = []struct {
+type testCase struct {
 	utf8, other, otherEncoding string
-}{
+}
+
+// testCases for encoding and decoding.
+var testCases = []testCase{
 	{"Résumé", "Résumé", "utf8"},
 	{"Résumé", "R\xe9sum\xe9", "latin1"},
 	{"これは漢字です。", "S0\x8c0o0\"oW[g0Y0\x020", "UTF-16LE"},
@@ -67,6 +71,11 @@ var testCases = []struct {
 }
 
 func TestDecode(t *testing.T) {
+	testCases := append(testCases, []testCase{
+		// Replace multi-byte maximum subpart of ill-formed subsequence with
+		// single replacement character (WhatWG requirement).
+		{"Rés\ufffdumé", "Rés\xe1\x80umé", "utf8"},
+	}...)
 	for _, tc := range testCases {
 		e, _ := Lookup(tc.otherEncoding)
 		if e == nil {
@@ -85,6 +94,14 @@ func TestDecode(t *testing.T) {
 }
 
 func TestEncode(t *testing.T) {
+	testCases := append(testCases, []testCase{
+		// Use Go-style replacement.
+		{"Rés\xe1\x80umé", "Rés\ufffd\ufffdumé", "utf8"},
+		// U+0144 LATIN SMALL LETTER N WITH ACUTE not supported by encoding.
+		{"Gdańsk", "Gda&#324;sk", "ISO-8859-11"},
+		{"\ufffd", "&#65533;", "ISO-8859-11"},
+		{"a\xe1\x80b", "a&#65533;&#65533;b", "ISO-8859-11"},
+	}...)
 	for _, tc := range testCases {
 		e, _ := Lookup(tc.otherEncoding)
 		if e == nil {
@@ -98,21 +115,6 @@ func TestEncode(t *testing.T) {
 		}
 		if s != tc.other {
 			t.Errorf("%s: got %q, want %q", tc.otherEncoding, s, tc.other)
-		}
-	}
-}
-
-// TestNames verifies that you can pass an encoding's name to Lookup and get
-// the same encoding back (except for "replacement").
-func TestNames(t *testing.T) {
-	for _, e := range encodings {
-		if e.name == "replacement" {
-			continue
-		}
-		_, got := Lookup(e.name)
-		if got != e.name {
-			t.Errorf("got %q, want %q", got, e.name)
-			continue
 		}
 	}
 }
@@ -211,5 +213,25 @@ func TestFromMeta(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%q: got %q, want %q", tc.meta, got, tc.want)
 		}
+	}
+}
+
+func TestXML(t *testing.T) {
+	const s = "<?xml version=\"1.0\" encoding=\"windows-1252\"?><a><Word>r\xe9sum\xe9</Word></a>"
+
+	d := xml.NewDecoder(strings.NewReader(s))
+	d.CharsetReader = NewReaderLabel
+
+	var a struct {
+		Word string
+	}
+	err := d.Decode(&a)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	want := "résumé"
+	if a.Word != want {
+		t.Errorf("got %q, want %q", a.Word, want)
 	}
 }

@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// go command is not available on android
+
+// +build !android
+
 package main
 
 import (
@@ -23,6 +27,9 @@ import (
 
 func TestEndToEnd(t *testing.T) {
 	dir, err := ioutil.TempDir("", "stringer")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(dir)
 	// Create stringer in temporary directory.
 	stringer := filepath.Join(dir, "stringer.exe")

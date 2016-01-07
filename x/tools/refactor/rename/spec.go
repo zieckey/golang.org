@@ -2,11 +2,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package rename
 
 // This file contains logic related to specifying a renaming: parsing of
 // the flags as a form of query, and finding the object(s) it denotes.
-// See FromFlagUsage for details.
+// See Usage for flag details.
 
 import (
 	"bytes"
@@ -15,6 +17,8 @@ import (
 	"go/build"
 	"go/parser"
 	"go/token"
+	"go/types"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,13 +26,12 @@ import (
 
 	"golang.org/x/tools/go/buildutil"
 	"golang.org/x/tools/go/loader"
-	"golang.org/x/tools/go/types"
 )
 
 // A spec specifies an entity to rename.
 //
-// It is populated from an -offset flag or -from query; see
-// FromFlagUsage for the allowed -from query forms.
+// It is populated from an -offset flag or -from query;
+// see Usage for the allowed -from query forms.
 //
 type spec struct {
 	// pkg is the package containing the position
@@ -65,28 +68,8 @@ type spec struct {
 	offset int
 }
 
-const FromFlagUsage = `
-A legal -from query has one of the following forms:
-
-  "encoding/json".Decoder.Decode	method of package-level named type
-  (*"encoding/json".Decoder).Decode	ditto, alternative syntax
-  "encoding/json".Decoder.buf           field of package-level named struct type
-  "encoding/json".HTMLEscape            package member (const, func, var, type)
-  "encoding/json".Decoder.Decode::x     local object x within a method
-  "encoding/json".HTMLEscape::x         local object x within a function
-  "encoding/json"::x                    object x anywhere within a package
-  json.go::x                            object x within file json.go
-
-  For methods, the parens and '*' on the receiver type are both optional.
-
-  Double-quotes may be omitted for single-segment import paths such as
-  fmt.  They may need to be escaped when writing a shell command.
-
-  It is an error if one of the ::x queries matches multiple objects.
-`
-
 // parseFromFlag interprets the "-from" flag value as a renaming specification.
-// See FromFlagUsage for valid formats.
+// See Usage in rename.go for valid formats.
 func parseFromFlag(ctxt *build.Context, fromFlag string) (*spec, error) {
 	var spec spec
 	var main string // sans "::x" suffix
@@ -146,7 +129,7 @@ func parseFromFlag(ctxt *build.Context, fromFlag string) (*spec, error) {
 	}
 
 	if Verbose {
-		fmt.Fprintf(os.Stderr, "-from spec: %+v\n", spec)
+		log.Printf("-from spec: %+v", spec)
 	}
 
 	return &spec, nil
@@ -471,6 +454,15 @@ func findObjects(info *loader.PackageInfo, spec *spec) ([]types.Object, error) {
 		}
 
 		if spec.searchFor == "" {
+			// If it is an embedded field, return the type of the field.
+			if v, ok := obj.(*types.Var); ok && v.Anonymous() {
+				switch t := v.Type().(type) {
+				case *types.Pointer:
+					return []types.Object{t.Elem().(*types.Named).Obj()}, nil
+				case *types.Named:
+					return []types.Object{t.Obj()}, nil
+				}
+			}
 			return []types.Object{obj}, nil
 		}
 

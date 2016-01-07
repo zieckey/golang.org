@@ -9,24 +9,21 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/internal"
+	"golang.org/x/text/encoding/internal/identifier"
 	"golang.org/x/text/transform"
 )
 
+// All is a list of all defined encodings in this package.
+var All = []encoding.Encoding{EUCKR}
+
 // EUCKR is the EUC-KR encoding, also known as Code Page 949.
-var EUCKR encoding.Encoding = eucKR{}
+var EUCKR encoding.Encoding = &eucKR
 
-type eucKR struct{}
-
-func (eucKR) NewDecoder() transform.Transformer {
-	return eucKRDecoder{}
-}
-
-func (eucKR) NewEncoder() transform.Transformer {
-	return eucKREncoder{}
-}
-
-func (eucKR) String() string {
-	return "EUC-KR"
+var eucKR = internal.Encoding{
+	&internal.SimpleEncoding{eucKRDecoder{}, eucKREncoder{}},
+	"EUC-KR",
+	identifier.EUCKR,
 }
 
 var errInvalidEUCKR = errors.New("korean: invalid EUC-KR encoding")
@@ -104,6 +101,14 @@ func (eucKREncoder) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, err 
 		if r < utf8.RuneSelf {
 			size = 1
 
+			if nDst >= len(dst) {
+				err = transform.ErrShortDst
+				break
+			}
+			dst[nDst] = uint8(r)
+			nDst++
+			continue
+
 		} else {
 			// Decode a multi-byte rune.
 			r, size = utf8.DecodeRune(src[nSrc:])
@@ -148,16 +153,9 @@ func (eucKREncoder) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, err 
 					goto write2
 				}
 			}
-			r = encoding.ASCIISub
-		}
-
-		if nDst >= len(dst) {
-			err = transform.ErrShortDst
+			err = internal.ErrASCIIReplacement
 			break
 		}
-		dst[nDst] = uint8(r)
-		nDst++
-		continue
 
 	write2:
 		if nDst+2 > len(dst) {

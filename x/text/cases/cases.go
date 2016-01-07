@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:generate go run gen.go gen_trieval.go
+
 // Package cases provides general and language-specific case mappers.
 package cases // import "golang.org/x/text/cases"
 
@@ -76,6 +78,15 @@ func Title(t language.Tag, opts ...Option) Caser {
 	return Caser{makeTitle(t, getOpts(opts...))}
 }
 
+// Fold returns a Caser that implements Unicode case folding.
+//
+// Folding is like mapping to lowercase without context-dependent mappings. Its
+// primary use is for caseless matching. Note that case folding does not
+// normalize the input and may not preserve a normal form.
+func Fold(t language.Tag, opts ...Option) Caser {
+	panic("TODO: implement")
+}
+
 // An Option is used to modify the behavior of a Caser.
 type Option func(o *options)
 
@@ -83,10 +94,17 @@ var (
 	// NoLower disables the lowercasing of non-leading letters for a title
 	// caser.
 	NoLower Option = noLower
+
+	// Compact omits mappings in case folding for characters that would grow the
+	// input.
+	Compact Option = compact
 )
+
+// TODO: option to preserve a normal form, if applicable?
 
 type options struct {
 	noLower bool
+	simple  bool
 
 	// TODO: segmenter, max ignorable, alternative versions, etc.
 
@@ -102,4 +120,8 @@ func getOpts(o ...Option) (res options) {
 
 func noLower(o *options) {
 	o.noLower = true
+}
+
+func compact(o *options) {
+	o.simple = true
 }

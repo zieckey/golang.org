@@ -5,54 +5,47 @@
 package main
 
 import (
+	"go/token"
+	"go/types"
+	"io"
 	"os"
 	"path/filepath"
-
-	"go/ast"
-	"go/build"
-	"go/parser"
-	"go/scanner"
-	"go/token"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/mobile/bind"
-	"golang.org/x/tools/go/loader"
 )
 
-func genPkg(pkg *build.Package) {
-	if len(pkg.CgoFiles) > 0 {
-		errorf("gobind: cannot use cgo-dependent package as service definition: %s", pkg.CgoFiles[0])
-		return
-	}
-
-	files := parseFiles(pkg.Dir, pkg.GoFiles)
-	if len(files) == 0 {
-		return // some error has been reported
-	}
-
-	conf := loader.Config{
-		SourceImports: true,
-		Fset:          fset,
-	}
-	conf.TypeChecker.Error = func(err error) {
-		errorf("%v", err)
-	}
-	conf.CreateFromFiles(pkg.ImportPath, files...)
-	program, err := conf.Load()
-	if err != nil {
-		errorf("%v", err)
-		return
-	}
-	p := program.Created[0].Pkg
-
+func genPkg(p *types.Package) {
+	fname := defaultFileName(*lang, p)
 	switch *lang {
 	case "java":
-		err = bind.GenJava(os.Stdout, fset, p)
+		w, closer := writer(fname, p)
+		processErr(bind.GenJava(w, fset, p, *javaPkg))
+		closer()
 	case "go":
-		err = bind.GenGo(os.Stdout, fset, p)
+		w, closer := writer(fname, p)
+		processErr(bind.GenGo(w, fset, p))
+		closer()
+	case "objc":
+		if fname == "" {
+			processErr(bind.GenObjc(os.Stdout, fset, p, *prefix, true))
+			processErr(bind.GenObjc(os.Stdout, fset, p, *prefix, false))
+		} else {
+			hname := fname[:len(fname)-2] + ".h"
+			w, closer := writer(hname, p)
+			processErr(bind.GenObjc(w, fset, p, *prefix, true))
+			closer()
+			w, closer = writer(fname, p)
+			processErr(bind.GenObjc(w, fset, p, *prefix, false))
+			closer()
+		}
 	default:
 		errorf("unknown target language: %q", *lang)
 	}
+}
 
+func processErr(err error) {
 	if err != nil {
 		if list, _ := err.(bind.ErrorList); len(list) > 0 {
 			for _, err := range list {
@@ -66,26 +59,48 @@ func genPkg(pkg *build.Package) {
 
 var fset = token.NewFileSet()
 
-func parseFiles(dir string, filenames []string) []*ast.File {
-	var files []*ast.File
-	hasErr := false
-	for _, filename := range filenames {
-		path := filepath.Join(dir, filename)
-		file, err := parser.ParseFile(fset, path, nil, parser.AllErrors)
-		if err != nil {
-			hasErr = true
-			if list, _ := err.(scanner.ErrorList); len(list) > 0 {
-				for _, err := range list {
-					errorf("%v", err)
-				}
-			} else {
-				errorf("%v", err)
-			}
+func writer(fname string, pkg *types.Package) (w io.Writer, closer func()) {
+	if fname == "" {
+		return os.Stdout, func() { return }
+	}
+
+	dir := filepath.Dir(fname)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		errorf("invalid output dir: %v", err)
+		os.Exit(exitStatus)
+	}
+
+	f, err := os.Create(fname)
+	if err != nil {
+		errorf("invalid output dir: %v", err)
+		os.Exit(exitStatus)
+	}
+	closer = func() {
+		if err := f.Close(); err != nil {
+			errorf("error in closing output file: %v", err)
 		}
-		files = append(files, file)
 	}
-	if hasErr {
-		return nil
+	return f, closer
+}
+
+func defaultFileName(lang string, pkg *types.Package) string {
+	if *outdir == "" {
+		return ""
 	}
-	return files
+
+	switch lang {
+	case "java":
+		firstRune, size := utf8.DecodeRuneInString(pkg.Name())
+		className := string(unicode.ToUpper(firstRune)) + pkg.Name()[size:]
+		return filepath.Join(*outdir, className+".java")
+	case "go":
+		return filepath.Join(*outdir, "go_"+pkg.Name()+".go")
+	case "objc":
+		firstRune, size := utf8.DecodeRuneInString(pkg.Name())
+		className := string(unicode.ToUpper(firstRune)) + pkg.Name()[size:]
+		return filepath.Join(*outdir, "Go"+className+".m")
+	}
+	errorf("unknown target language: %q", lang)
+	os.Exit(exitStatus)
+	return ""
 }

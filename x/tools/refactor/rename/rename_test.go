@@ -7,29 +7,25 @@ package rename
 import (
 	"bytes"
 	"fmt"
-	"go/ast"
 	"go/build"
-	"go/format"
 	"go/token"
-	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
+
+	"golang.org/x/tools/go/buildutil"
 )
 
 // TODO(adonovan): test reported source positions, somehow.
 
 func TestConflicts(t *testing.T) {
-	defer func(savedDryRun bool, savedReportError func(token.Position, string)) {
-		DryRun = savedDryRun
+	defer func(savedWriteFile func(string, []byte) error, savedReportError func(token.Position, string)) {
+		writeFile = savedWriteFile
 		reportError = savedReportError
-	}(DryRun, reportError)
-	DryRun = true
+	}(writeFile, reportError)
+	writeFile = func(string, []byte) error { return nil }
 
 	var ctxt *build.Context
 	for _, test := range []struct {
@@ -420,9 +416,9 @@ var _ I = E{}
 }
 
 func TestRewrites(t *testing.T) {
-	defer func(savedRewriteFile func(*token.FileSet, *ast.File, string) error) {
-		rewriteFile = savedRewriteFile
-	}(rewriteFile)
+	defer func(savedWriteFile func(string, []byte) error) {
+		writeFile = savedWriteFile
+	}(writeFile)
 
 	var ctxt *build.Context
 	for _, test := range []struct {
@@ -724,6 +720,57 @@ type _ struct{ *foo.U }
 			},
 		},
 
+		// Renaming of embedded field that is a qualified reference with the '-from' flag.
+		// (Regression test for bug 12038.)
+		{
+			ctxt: fakeContext(map[string][]string{
+				"foo": {`package foo; type T int`},
+				"main": {`package main
+
+import "foo"
+
+type V struct{ *foo.T }
+`},
+			}),
+			from: "(main.V).T", to: "U", // the "T" in *foo.T
+			want: map[string]string{
+				"/go/src/foo/0.go": `package foo
+
+type U int
+`,
+				"/go/src/main/0.go": `package main
+
+import "foo"
+
+type V struct{ *foo.U }
+`,
+			},
+		},
+		{
+			ctxt: fakeContext(map[string][]string{
+				"foo": {`package foo; type T int`},
+				"main": {`package main
+
+import "foo"
+
+type V struct{ foo.T }
+`},
+			}),
+			from: "(main.V).T", to: "U", // the "T" in *foo.T
+			want: map[string]string{
+				"/go/src/foo/0.go": `package foo
+
+type U int
+`,
+				"/go/src/main/0.go": `package main
+
+import "foo"
+
+type V struct{ foo.U }
+`,
+			},
+		},
+
 		// Interface method renaming.
 		{
 			ctxt: fakeContext(map[string][]string{
@@ -980,12 +1027,8 @@ var _ = I(C(0)).(J)
 		}
 
 		got := make(map[string]string)
-		rewriteFile = func(fset *token.FileSet, f *ast.File, orig string) error {
-			var out bytes.Buffer
-			if err := format.Node(&out, fset, f); err != nil {
-				return err
-			}
-			got[filepath.ToSlash(orig)] = out.String()
+		writeFile = func(filename string, content []byte) error {
+			got[filepath.ToSlash(filename)] = string(content)
 			return nil
 		}
 
@@ -1020,83 +1063,52 @@ var _ = I(C(0)).(J)
 	}
 }
 
+func TestDiff(t *testing.T) {
+	defer func() {
+		Diff = false
+		stdout = os.Stdout
+	}()
+	Diff = true
+	stdout = new(bytes.Buffer)
+
+	if err := Main(&build.Default, "", `"golang.org/x/tools/refactor/rename".justHereForTestingDiff`, "Foo"); err != nil {
+		t.Fatal(err)
+	}
+
+	// NB: there are tabs in the string literal!
+	if !strings.Contains(stdout.(fmt.Stringer).String(), `
+-func justHereForTestingDiff() {
+-	justHereForTestingDiff()
++func Foo() {
++	Foo()
+ }
+`) {
+		t.Errorf("unexpected diff:\n<<%s>>", stdout)
+	}
+}
+
+func justHereForTestingDiff() {
+	justHereForTestingDiff()
+}
+
 // ---------------------------------------------------------------------
 
-// Plundered/adapted from go/loader/loader_test.go
-
-// TODO(adonovan): make this into a nice testing utility within go/buildutil.
-
-// pkgs maps the import path of a fake package to a list of its file contents;
-// file names are synthesized, e.g. %d.go.
+// Simplifying wrapper around buildutil.FakeContext for packages whose
+// filenames are sequentially numbered (%d.go).  pkgs maps a package
+// import path to its list of file contents.
 func fakeContext(pkgs map[string][]string) *build.Context {
-	ctxt := build.Default // copy
-	ctxt.GOROOT = "/go"
-	ctxt.GOPATH = ""
-	ctxt.IsDir = func(path string) bool {
-		path = filepath.ToSlash(path)
-		if path == "/go/src" {
-			return true // needed by (*build.Context).SrcDirs
+	pkgs2 := make(map[string]map[string]string)
+	for path, files := range pkgs {
+		filemap := make(map[string]string)
+		for i, contents := range files {
+			filemap[fmt.Sprintf("%d.go", i)] = contents
 		}
-		if p := strings.TrimPrefix(path, "/go/src/"); p == path {
-			return false
-		} else {
-			path = p
-		}
-		_, ok := pkgs[path]
-		return ok
+		pkgs2[path] = filemap
 	}
-	ctxt.ReadDir = func(dir string) ([]os.FileInfo, error) {
-		dir = filepath.ToSlash(dir)
-		dir = dir[len("/go/src/"):]
-		var fis []os.FileInfo
-		if dir == "" {
-			// Assumes keys of pkgs are single-segment.
-			for p := range pkgs {
-				fis = append(fis, fakeDirInfo(p))
-			}
-		} else {
-			for i := range pkgs[dir] {
-				fis = append(fis, fakeFileInfo(i))
-			}
-		}
-		return fis, nil
-	}
-	ctxt.OpenFile = func(path string) (io.ReadCloser, error) {
-		path = filepath.ToSlash(path)
-		path = path[len("/go/src/"):]
-		dir, base := filepath.Split(path)
-		dir = filepath.Clean(dir)
-		index, _ := strconv.Atoi(strings.TrimSuffix(base, ".go"))
-		return ioutil.NopCloser(bytes.NewBufferString(pkgs[dir][index])), nil
-	}
-	ctxt.IsAbsPath = func(path string) bool {
-		path = filepath.ToSlash(path)
-		// Don't rely on the default (filepath.Path) since on
-		// Windows, it reports our virtual paths as non-absolute.
-		return strings.HasPrefix(path, "/")
-	}
-	return &ctxt
+	return buildutil.FakeContext(pkgs2)
 }
 
 // helper for single-file main packages with no imports.
 func main(content string) *build.Context {
 	return fakeContext(map[string][]string{"main": {content}})
 }
-
-type fakeFileInfo int
-
-func (fi fakeFileInfo) Name() string    { return fmt.Sprintf("%d.go", fi) }
-func (fakeFileInfo) Sys() interface{}   { return nil }
-func (fakeFileInfo) ModTime() time.Time { return time.Time{} }
-func (fakeFileInfo) IsDir() bool        { return false }
-func (fakeFileInfo) Size() int64        { return 0 }
-func (fakeFileInfo) Mode() os.FileMode  { return 0644 }
-
-type fakeDirInfo string
-
-func (fd fakeDirInfo) Name() string    { return string(fd) }
-func (fakeDirInfo) Sys() interface{}   { return nil }
-func (fakeDirInfo) ModTime() time.Time { return time.Time{} }
-func (fakeDirInfo) IsDir() bool        { return true }
-func (fakeDirInfo) Size() int64        { return 0 }
-func (fakeDirInfo) Mode() os.FileMode  { return 0755 }

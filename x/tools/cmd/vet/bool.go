@@ -174,6 +174,7 @@ func (op boolOp) split(e ast.Expr) (exprs []ast.Expr) {
 	return
 }
 
+// unparen returns e with any enclosing parentheses stripped.
 func unparen(e ast.Expr) ast.Expr {
 	for {
 		p, ok := e.(*ast.ParenExpr)

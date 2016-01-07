@@ -7,7 +7,6 @@ package godoc
 import (
 	"bytes"
 	"encoding/json"
-	"expvar"
 	"fmt"
 	"go/ast"
 	"go/build"
@@ -35,11 +34,12 @@ import (
 // handlerServer is a migration from an old godoc http Handler type.
 // This should probably merge into something else.
 type handlerServer struct {
-	p       *Presentation
-	c       *Corpus  // copy of p.Corpus
-	pattern string   // url pattern; e.g. "/pkg/"
-	fsRoot  string   // file system root to which the pattern is mapped; e.g. "/src"
-	exclude []string // file system paths to exclude; e.g. "/src/cmd"
+	p           *Presentation
+	c           *Corpus  // copy of p.Corpus
+	pattern     string   // url pattern; e.g. "/pkg/"
+	stripPrefix string   // prefix to strip from import path; e.g. "pkg/"
+	fsRoot      string   // file system root to which the pattern is mapped; e.g. "/src"
+	exclude     []string // file system paths to exclude; e.g. "/src/cmd"
 }
 
 func (s *handlerServer) registerWithMux(mux *http.ServeMux) {
@@ -236,7 +236,7 @@ func (h *handlerServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	relpath := pathpkg.Clean(r.URL.Path[len(h.pattern):])
+	relpath := pathpkg.Clean(r.URL.Path[len(h.stripPrefix)+1:])
 	abspath := pathpkg.Join(h.fsRoot, relpath)
 	mode := h.p.GetPageInfoMode(r)
 	if relpath == builtinPkgPath {
@@ -301,11 +301,13 @@ func (h *handlerServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		info.TypeInfoIndex[ti.Name] = i
 	}
 
+	info.Share = allowShare(r)
 	h.p.ServePage(w, Page{
 		Title:    title,
 		Tabtitle: tabtitle,
 		Subtitle: subtitle,
 		Body:     applyTemplate(h.p.PackageHTML, "packageHTML", info),
+		Share:    info.Share,
 	})
 }
 
@@ -460,27 +462,18 @@ func (w *writerCapturesErr) Write(p []byte) (int, error) {
 	return n, err
 }
 
-var httpErrors *expvar.Map
-
-func init() {
-	httpErrors = expvar.NewMap("httpWriteErrors").Init()
-}
-
 // applyTemplateToResponseWriter uses an http.ResponseWriter as the io.Writer
 // for the call to template.Execute.  It uses an io.Writer wrapper to capture
-// errors from the underlying http.ResponseWriter.  If an error is found, an
-// expvar will be incremented.  Other template errors will be logged.  This is
-// done to keep from polluting log files with error messages due to networking
-// issues, such as client disconnects and http HEAD protocol violations.
+// errors from the underlying http.ResponseWriter.  Errors are logged only when
+// they come from the template processing and not the Writer; this avoid
+// polluting log files with error messages due to networking issues, such as
+// client disconnects and http HEAD protocol violations.
 func applyTemplateToResponseWriter(rw http.ResponseWriter, t *template.Template, data interface{}) {
 	w := &writerCapturesErr{w: rw}
 	err := t.Execute(w, data)
 	// There are some cases where template.Execute does not return an error when
 	// rw returns an error, and some where it does.  So check w.err first.
-	if w.err != nil {
-		// For http errors, increment an expvar.
-		httpErrors.Add(w.err.Error(), 1)
-	} else if err != nil {
+	if w.err == nil && err != nil {
 		// Log template errors.
 		log.Printf("%s.Execute: %s", t.Name(), err)
 	}
@@ -556,6 +549,7 @@ func (p *Presentation) serveTextFile(w http.ResponseWriter, r *http.Request, abs
 		Title:    title + " " + relpath,
 		Tabtitle: relpath,
 		Body:     buf.Bytes(),
+		Share:    allowShare(r),
 	})
 }
 
@@ -616,6 +610,7 @@ func (p *Presentation) serveDirectory(w http.ResponseWriter, r *http.Request, ab
 		Title:    "Directory " + relpath,
 		Tabtitle: relpath,
 		Body:     applyTemplate(p.DirlistHTML, "dirlistHTML", list),
+		Share:    allowShare(r),
 	})
 }
 
@@ -641,6 +636,12 @@ func (p *Presentation) ServeHTMLDoc(w http.ResponseWriter, r *http.Request, absp
 		log.Printf("decoding metadata %s: %v", relpath, err)
 	}
 
+	page := Page{
+		Title:    meta.Title,
+		Subtitle: meta.Subtitle,
+		Share:    allowShare(r),
+	}
+
 	// evaluate as template if indicated
 	if meta.Template {
 		tmpl, err := template.New("main").Funcs(p.TemplateFuncs()).Parse(string(src))
@@ -650,7 +651,7 @@ func (p *Presentation) ServeHTMLDoc(w http.ResponseWriter, r *http.Request, absp
 			return
 		}
 		var buf bytes.Buffer
-		if err := tmpl.Execute(&buf, nil); err != nil {
+		if err := tmpl.Execute(&buf, page); err != nil {
 			log.Printf("executing template %s: %v", relpath, err)
 			p.ServeError(w, r, relpath, err)
 			return
@@ -665,11 +666,8 @@ func (p *Presentation) ServeHTMLDoc(w http.ResponseWriter, r *http.Request, absp
 		src = buf.Bytes()
 	}
 
-	p.ServePage(w, Page{
-		Title:    meta.Title,
-		Subtitle: meta.Subtitle,
-		Body:     src,
-	})
+	page.Body = src
+	p.ServePage(w, page)
 }
 
 func (p *Presentation) ServeFile(w http.ResponseWriter, r *http.Request) {

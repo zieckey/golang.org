@@ -1,48 +1,30 @@
 # Go support for Mobile devices
 
-The Go mobile repository holds packages and build tools for using Go on Android.
+The Go mobile repository holds packages and build tools for using Go on mobile platforms.
 
-This is early work and the build system is a bumpy ride. Building a binary for
-Android requires using a Go cross compiler and an external linker from the NDK.  
+Package documentation as a starting point:
 
-For now, the easiest way to setup a build environment is using the provided
-Dockerfile:
+- [Building all-Go apps](https://golang.org/x/mobile/app)
+- [Building libraries for SDK apps](https://golang.org/x/mobile/cmd/gobind)
 
-	go get -d golang.org/x/mobile/...
-	docker build -t mobile $GOPATH/src/golang.org/x/mobile
+![Caution image](doc/caution.png)
 
-In your app directory under your `$GOPATH`, copy the following files from either
-the [golang.org/x/mobile/basic](https://github.com/golang/mobile/tree/master/example/basic)
-or [golang.org/x/mobile/libhello](https://github.com/golang/mobile/tree/master/example/libhello)
-apps:
+The Go Mobile project is experimental. Use this at your own risk.
+While we are working hard to improve it, neither Google nor the Go
+team can provide end-user support.
 
-	AndroidManifest.xml
-	all.bash
-	build.xml
-	jni/Android.mk
-	make.bash
-
-Start with `basic` if you are writing an all-Go application (that is, an OpenGL game)
-or libhello if you are building a `.so` file for use from Java via
-[gobind](https://godoc.org/golang.org/x/mobile/cmd/gobind). Edit the files to change
-the name of your app.
-
-To build, run:
-
-	docker run -v $GOPATH/src:/src mobile /bin/bash -c 'cd /src/your/project && ./make.bash'
-
-When working with an all-Go application, this will produce a binary at
-`$GOPATH/src/your/project/bin/name-debug.apk`. You can use the adb tool to install
-and run this app. See all.bash for an example.
+This is early work and installing the build system requires Go 1.5.
+Follow the instructions on
+[golang.org/wiki/Mobile](https://golang.org/wiki/Mobile)
+to install the gomobile command, build the
+[basic](https://golang.org/x/mobile/example/basic)
+and the [bind](https://golang.org/x/mobile/example/bind) example apps.
 
 --
 
-APIs are currently very limited, but under active development. Package
-documentation serves as a starting point:
-
-- [mobile/app](http://godoc.org/golang.org/x/mobile/app)
-- [mobile/gl](http://godoc.org/golang.org/x/mobile/gl)
-- [mobile/sprite](http://godoc.org/golang.org/x/mobile/sprite)
-- [mobile/cmd/gobind](http://godoc.org/golang.org/x/mobile/cmd/gobind)
-
 Contributions to Go are appreciated. See https://golang.org/doc/contribute.html.
+
+* Bugs can be filed at the [Go issue tracker](https://golang.org/issue/new?title=x/mobile:+).
+* Feature requests should preliminary be discussed on
+[golang-nuts](https://groups.google.com/forum/#!forum/golang-nuts)
+mailing list.

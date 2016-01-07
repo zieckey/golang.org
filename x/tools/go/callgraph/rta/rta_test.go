@@ -2,6 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
+// No testdata on Android.
+
+// +build !android
+
 package rta_test
 
 import (
@@ -10,6 +16,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/ioutil"
 	"sort"
 	"strings"
@@ -19,7 +26,7 @@ import (
 	"golang.org/x/tools/go/callgraph/rta"
 	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/go/ssa"
-	"golang.org/x/tools/go/types"
+	"golang.org/x/tools/go/ssa/ssautil"
 )
 
 var inputs = []string{
@@ -55,8 +62,7 @@ func TestRTA(t *testing.T) {
 		}
 
 		conf := loader.Config{
-			SourceImports: true,
-			ParserMode:    parser.ParseComments,
+			ParserMode: parser.ParseComments,
 		}
 		f, err := conf.ParseFile(filename, content)
 		if err != nil {
@@ -77,16 +83,16 @@ func TestRTA(t *testing.T) {
 			continue
 		}
 
-		prog := ssa.Create(iprog, 0)
+		prog := ssautil.CreateProgram(iprog, 0)
 		mainPkg := prog.Package(iprog.Created[0].Pkg)
-		prog.BuildAll()
+		prog.Build()
 
 		res := rta.Analyze([]*ssa.Function{
 			mainPkg.Func("main"),
 			mainPkg.Func("init"),
 		}, true)
 
-		if got := printResult(res, mainPkg.Object); got != want {
+		if got := printResult(res, mainPkg.Pkg); got != want {
 			t.Errorf("%s: got:\n%s\nwant:\n%s",
 				prog.Fset.Position(pos), got, want)
 		}
@@ -126,7 +132,7 @@ func printResult(res *rta.Result, from *types.Package) string {
 	var rtypes []string
 	res.RuntimeTypes.Iterate(func(key types.Type, value interface{}) {
 		if value == false { // accessible to reflection
-			rtypes = append(rtypes, types.TypeString(from, key))
+			rtypes = append(rtypes, types.TypeString(key, types.RelativeTo(from)))
 		}
 	})
 	writeSorted(rtypes)

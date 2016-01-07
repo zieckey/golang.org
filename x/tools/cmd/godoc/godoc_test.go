@@ -70,10 +70,18 @@ var godocTests = []struct {
 // TODO(adonovan): opt: do this at most once, and do the cleanup
 // exactly once.  How though?  There's no atexit.
 func buildGodoc(t *testing.T) (bin string, cleanup func()) {
+	if runtime.GOARCH == "arm" {
+		t.Skip("skipping test on arm platforms; too slow")
+	}
 	tmp, err := ioutil.TempDir("", "godoc-regtest-")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() {
+		if cleanup == nil { // probably, go build failed.
+			os.RemoveAll(tmp)
+		}
+	}()
 
 	bin = filepath.Join(tmp, "godoc")
 	if runtime.GOOS == "windows" {
@@ -126,18 +134,39 @@ func serverAddress(t *testing.T) string {
 	return ln.Addr().String()
 }
 
-func waitForServer(t *testing.T, address string) {
-	// Poll every 50ms for a total of 5s.
-	for i := 0; i < 100; i++ {
-		time.Sleep(50 * time.Millisecond)
-		conn, err := net.Dial("tcp", address)
+func waitForServerReady(t *testing.T, addr string) {
+	waitForServer(t,
+		fmt.Sprintf("http://%v/", addr),
+		"The Go Programming Language",
+		5*time.Second)
+}
+
+func waitForSearchReady(t *testing.T, addr string) {
+	waitForServer(t,
+		fmt.Sprintf("http://%v/search?q=FALLTHROUGH", addr),
+		"The list of tokens.",
+		2*time.Minute)
+}
+
+const pollInterval = 200 * time.Millisecond
+
+func waitForServer(t *testing.T, url, match string, timeout time.Duration) {
+	// "health check" duplicated from x/tools/cmd/tipgodoc/tip.go
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(pollInterval)
+		res, err := http.Get(url)
 		if err != nil {
 			continue
 		}
-		conn.Close()
-		return
+		rbody, err := ioutil.ReadAll(res.Body)
+		res.Body.Close()
+		if err == nil && res.StatusCode == http.StatusOK &&
+			bytes.Contains(rbody, []byte(match)) {
+			return
+		}
 	}
-	t.Fatalf("Server %q failed to respond in 5 seconds", address)
+	t.Fatalf("Server failed to respond in %v", timeout)
 }
 
 func killAndWait(cmd *exec.Cmd) {
@@ -147,22 +176,47 @@ func killAndWait(cmd *exec.Cmd) {
 
 // Basic integration test for godoc HTTP interface.
 func TestWeb(t *testing.T) {
+	testWeb(t, false)
+}
+
+// Basic integration test for godoc HTTP interface.
+func TestWebIndex(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in -short mode")
+	}
+	testWeb(t, true)
+}
+
+// Basic integration test for godoc HTTP interface.
+func testWeb(t *testing.T, withIndex bool) {
 	bin, cleanup := buildGodoc(t)
 	defer cleanup()
 	addr := serverAddress(t)
-	cmd := exec.Command(bin, fmt.Sprintf("-http=%s", addr))
+	args := []string{fmt.Sprintf("-http=%s", addr)}
+	if withIndex {
+		args = append(args, "-index", "-index_interval=-1s")
+	}
+	cmd := exec.Command(bin, args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	cmd.Args[0] = "godoc"
+	cmd.Env = godocEnv()
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start godoc: %s", err)
 	}
 	defer killAndWait(cmd)
-	waitForServer(t, addr)
+
+	if withIndex {
+		waitForSearchReady(t, addr)
+	} else {
+		waitForServerReady(t, addr)
+	}
+
 	tests := []struct {
 		path      string
 		match     []string
 		dontmatch []string
+		needIndex bool
 	}{
 		{
 			path:  "/",
@@ -202,8 +256,33 @@ func TestWeb(t *testing.T) {
 				"cmd/gc",
 			},
 		},
+		{
+			path: "/search?q=notwithstanding",
+			match: []string{
+				"/src",
+			},
+			dontmatch: []string{
+				"/pkg/bootstrap",
+			},
+			needIndex: true,
+		},
+		{
+			path: "/pkg/strings/",
+			match: []string{
+				`href="/src/strings/strings.go"`,
+			},
+		},
+		{
+			path: "/cmd/compile/internal/amd64/",
+			match: []string{
+				`href="/src/cmd/compile/internal/amd64/reg.go"`,
+			},
+		},
 	}
 	for _, test := range tests {
+		if test.needIndex && !withIndex {
+			continue
+		}
 		url := fmt.Sprintf("http://%s%s", addr, test.path)
 		resp, err := http.Get(url)
 		if err != nil {
@@ -236,6 +315,10 @@ func TestWeb(t *testing.T) {
 
 // Basic integration test for godoc -analysis=type (via HTTP interface).
 func TestTypeAnalysis(t *testing.T) {
+	if runtime.GOOS == "plan9" {
+		t.Skip("skipping test on plan9 (issue #11974)") // see comment re: Plan 9 below
+	}
+
 	// Write a fake GOROOT/GOPATH.
 	tmpdir, err := ioutil.TempDir("", "godoc-analysis")
 	if err != nil {
@@ -288,12 +371,12 @@ func main() { print(lib.V) }
 		t.Fatalf("failed to start godoc: %s", err)
 	}
 	defer killAndWait(cmd)
-	waitForServer(t, addr)
+	waitForServerReady(t, addr)
 
 	// Wait for type analysis to complete.
 	reader := bufio.NewReader(stderr)
 	for {
-		s, err := reader.ReadString('\n')
+		s, err := reader.ReadString('\n') // on Plan 9 this fails
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -354,4 +437,16 @@ tryagain:
 				url, test.pattern, string(body))
 		}
 	}
+}
+
+// godocEnv returns the process environment without the GOPATH variable.
+// (We don't want the indexer looking at the local workspace during tests.)
+func godocEnv() (env []string) {
+	for _, v := range os.Environ() {
+		if strings.HasPrefix(v, "GOPATH=") {
+			continue
+		}
+		env = append(env, v)
+	}
+	return
 }

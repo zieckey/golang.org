@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// NOTE: This version of vet is retired. Bug fixes only.
+// Vet now lives in the core repository.
+
 // Vet is a simple checker for static errors in Go source code.
 // See doc.go for more information.
 package main
@@ -15,20 +18,21 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"go/types"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	_ "golang.org/x/tools/go/gcimporter"
-	"golang.org/x/tools/go/types"
 )
 
-// TODO: Need a flag to set build tags when parsing the package.
+var (
+	verbose  = flag.Bool("v", false, "verbose")
+	testFlag = flag.Bool("test", false, "for testing only: sets -all and -shadow")
+	tags     = flag.String("tags", "", "comma-separated list of build tags to apply when parsing")
+	tagList  = []string{} // exploded version of tags flag; set in main
+)
 
-var verbose = flag.Bool("v", false, "verbose")
-var testFlag = flag.Bool("test", false, "for testing only: sets -all and -shadow")
 var exitCode = 0
 
 // "all" is here only for the appearance of backwards compatibility.
@@ -49,6 +53,14 @@ var experimental = map[string]bool{}
 
 // setTrueCount record how many flags are explicitly set to true.
 var setTrueCount int
+
+// dirsRun and filesRun indicate whether the vet is applied to directory or
+// file targets. The distinction affects which checks are run.
+var dirsRun, filesRun bool
+
+// includesNonTest indicates whether the vet is applied to non-test targets.
+// Certain checks are relevant only if they touch both test and non-test files.
+var includesNonTest bool
 
 // A triState is a boolean that knows whether it has been set to either true or false.
 // It is used to identify if a flag appears; the standard boolean flag cannot
@@ -128,6 +140,7 @@ var (
 	binaryExpr    *ast.BinaryExpr
 	callExpr      *ast.CallExpr
 	compositeLit  *ast.CompositeLit
+	exprStmt      *ast.ExprStmt
 	field         *ast.Field
 	funcDecl      *ast.FuncDecl
 	funcLit       *ast.FuncLit
@@ -197,34 +210,14 @@ func main() {
 		}
 	}
 
-	if *printfuncs != "" {
-		for _, name := range strings.Split(*printfuncs, ",") {
-			if len(name) == 0 {
-				flag.Usage()
-			}
-			skip := 0
-			if colon := strings.LastIndex(name, ":"); colon > 0 {
-				var err error
-				skip, err = strconv.Atoi(name[colon+1:])
-				if err != nil {
-					errorf(`illegal format for "Func:N" argument %q; %s`, name, err)
-				}
-				name = name[:colon]
-			}
-			name = strings.ToLower(name)
-			if name[len(name)-1] == 'f' {
-				printfList[name] = skip
-			} else {
-				printList[name] = skip
-			}
-		}
-	}
+	tagList = strings.Split(*tags, ",")
+
+	initPrintFlags()
+	initUnusedFlags()
 
 	if flag.NArg() == 0 {
 		Usage()
 	}
-	dirs := false
-	files := false
 	for _, name := range flag.Args() {
 		// Is it a directory?
 		fi, err := os.Stat(name)
@@ -233,15 +226,18 @@ func main() {
 			continue
 		}
 		if fi.IsDir() {
-			dirs = true
+			dirsRun = true
 		} else {
-			files = true
+			filesRun = true
+			if !strings.HasSuffix(name, "_test.go") {
+				includesNonTest = true
+			}
 		}
 	}
-	if dirs && files {
+	if dirsRun && filesRun {
 		Usage()
 	}
-	if dirs {
+	if dirsRun {
 		for _, name := range flag.Args() {
 			walkDir(name)
 		}
@@ -265,7 +261,13 @@ func prefixDirectory(directory string, names []string) {
 // doPackageDir analyzes the single package found in the directory, if there is one,
 // plus a test package, if there is one.
 func doPackageDir(directory string) {
-	pkg, err := build.Default.ImportDir(directory, 0)
+	context := build.Default
+	if len(context.BuildTags) != 0 {
+		warnf("build tags %s previously set", context.BuildTags)
+	}
+	context.BuildTags = append(tagList, context.BuildTags...)
+
+	pkg, err := context.ImportDir(directory, 0)
 	if err != nil {
 		// If it's just that there are no go source files, that's fine.
 		if _, nogo := err.(*build.NoGoError); nogo {
@@ -291,13 +293,14 @@ func doPackageDir(directory string) {
 }
 
 type Package struct {
-	path     string
-	defs     map[*ast.Ident]types.Object
-	uses     map[*ast.Ident]types.Object
-	types    map[ast.Expr]types.TypeAndValue
-	spans    map[types.Object]Span
-	files    []*File
-	typesPkg *types.Package
+	path      string
+	defs      map[*ast.Ident]types.Object
+	uses      map[*ast.Ident]types.Object
+	selectors map[*ast.SelectorExpr]*types.Selection
+	types     map[ast.Expr]types.TypeAndValue
+	spans     map[types.Object]Span
+	files     []*File
+	typesPkg  *types.Package
 }
 
 // doPackage analyzes the single package constructed from the named files.
@@ -466,6 +469,8 @@ func (f *File) Visit(node ast.Node) ast.Visitor {
 		key = callExpr
 	case *ast.CompositeLit:
 		key = compositeLit
+	case *ast.ExprStmt:
+		key = exprStmt
 	case *ast.Field:
 		key = field
 	case *ast.FuncDecl:

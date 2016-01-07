@@ -51,10 +51,12 @@ func (g Graph) Search(roots ...string) map[string]bool {
 	return seen
 }
 
-// Builds scans the specified Go workspace and builds the forward and
+// Build scans the specified Go workspace and builds the forward and
 // reverse import dependency graphs for all its packages.
-// It also returns a mapping from import paths to errors for packages
-// that could not be loaded.
+// It also returns a mapping from canonical import paths to errors for packages
+// whose loading was not entirely successful.
+// A package may appear in the graph and in the errors mapping.
+// All package paths are canonical and may contain "/vendor/".
 func Build(ctxt *build.Context) (forward, reverse Graph, errors map[string]error) {
 	type importEdge struct {
 		from, to string
@@ -66,35 +68,78 @@ func Build(ctxt *build.Context) (forward, reverse Graph, errors map[string]error
 
 	ch := make(chan interface{})
 
-	var wg sync.WaitGroup
-	buildutil.ForEachPackage(ctxt, func(path string, err error) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err != nil {
-				ch <- pathError{path, err}
-				return
-			}
-			bp, err := ctxt.Import(path, "", 0)
-			if _, ok := err.(*build.NoGoError); ok {
-				return // empty directory is not an error
-			}
-			if err != nil {
-				ch <- pathError{path, err}
-				return
-			}
-			for _, imp := range bp.Imports {
-				ch <- importEdge{path, imp}
-			}
-			for _, imp := range bp.TestImports {
-				ch <- importEdge{path, imp}
-			}
-			for _, imp := range bp.XTestImports {
-				ch <- importEdge{path, imp}
-			}
-		}()
-	})
 	go func() {
+		sema := make(chan int, 20) // I/O concurrency limiting semaphore
+		var wg sync.WaitGroup
+		buildutil.ForEachPackage(ctxt, func(path string, err error) {
+			if err != nil {
+				ch <- pathError{path, err}
+				return
+			}
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				sema <- 1
+				bp, err := ctxt.Import(path, "", buildutil.AllowVendor)
+				<-sema
+
+				if err != nil {
+					if _, ok := err.(*build.NoGoError); ok {
+						// empty directory is not an error
+					} else {
+						ch <- pathError{path, err}
+					}
+					// Even in error cases, Import usually returns a package.
+				}
+
+				// absolutize resolves an import path relative
+				// to the current package bp.
+				// The absolute form may contain "vendor".
+				//
+				// The vendoring feature slows down Build by 3×.
+				// Here are timings from a 1400 package workspace:
+				//    1100ms: current code (with vendor check)
+				//     880ms: with a nonblocking cache around ctxt.IsDir
+				//     840ms: nonblocking cache with duplicate suppression
+				//     340ms: original code (no vendor check)
+				// TODO(adonovan): optimize, somehow.
+				absolutize := func(path string) string { return path }
+				if buildutil.AllowVendor != 0 {
+					memo := make(map[string]string)
+					absolutize = func(path string) string {
+						canon, ok := memo[path]
+						if !ok {
+							sema <- 1
+							bp2, _ := ctxt.Import(path, bp.Dir, build.FindOnly|buildutil.AllowVendor)
+							<-sema
+
+							if bp2 != nil {
+								canon = bp2.ImportPath
+							} else {
+								canon = path
+							}
+							memo[path] = canon
+						}
+						return canon
+					}
+				}
+
+				if bp != nil {
+					for _, imp := range bp.Imports {
+						ch <- importEdge{path, absolutize(imp)}
+					}
+					for _, imp := range bp.TestImports {
+						ch <- importEdge{path, absolutize(imp)}
+					}
+					for _, imp := range bp.XTestImports {
+						ch <- importEdge{path, absolutize(imp)}
+					}
+				}
+
+			}()
+		})
 		wg.Wait()
 		close(ch)
 	}()

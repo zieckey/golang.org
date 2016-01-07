@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package interp
 
 // Emulated "reflect" package.
@@ -13,11 +15,11 @@ package interp
 import (
 	"fmt"
 	"go/token"
+	"go/types"
 	"reflect"
 	"unsafe"
 
 	"golang.org/x/tools/go/ssa"
-	"golang.org/x/tools/go/types"
 )
 
 type opaqueType struct {
@@ -31,8 +33,7 @@ func (t *opaqueType) String() string { return t.name }
 var reflectTypesPackage = types.NewPackage("reflect", "reflect")
 
 // rtype is the concrete type the interpreter uses to implement the
-// reflect.Type interface.  Since its type is opaque to the target
-// language, we use a types.Basic.
+// reflect.Type interface.
 //
 // type rtype <opaque>
 var rtypeType = makeNamedType("rtype", &opaqueType{nil, "rtype"})
@@ -107,6 +108,12 @@ func ext۰reflect۰rtype۰Field(fr *frame, args []value) value {
 	}
 }
 
+func ext۰reflect۰rtype۰In(fr *frame, args []value) value {
+	// Signature: func (t reflect.rtype, i int) int
+	i := args[1].(int)
+	return makeReflectType(rtype{args[0].(rtype).t.(*types.Signature).Params().At(i).Type()})
+}
+
 func ext۰reflect۰rtype۰Kind(fr *frame, args []value) value {
 	// Signature: func (t reflect.rtype) uint
 	return uint(reflectKind(args[0].(rtype).t))
@@ -115,6 +122,11 @@ func ext۰reflect۰rtype۰Kind(fr *frame, args []value) value {
 func ext۰reflect۰rtype۰NumField(fr *frame, args []value) value {
 	// Signature: func (t reflect.rtype) int
 	return args[0].(rtype).t.Underlying().(*types.Struct).NumFields()
+}
+
+func ext۰reflect۰rtype۰NumIn(fr *frame, args []value) value {
+	// Signature: func (t reflect.rtype) int
+	return args[0].(rtype).t.(*types.Signature).Params().Len()
 }
 
 func ext۰reflect۰rtype۰NumMethod(fr *frame, args []value) value {
@@ -150,8 +162,13 @@ func ext۰reflect۰New(fr *frame, args []value) value {
 	return makeReflectValue(types.NewPointer(t), &alloc)
 }
 
+func ext۰reflect۰SliceOf(fr *frame, args []value) value {
+	// Signature: func (t reflect.rtype) Type
+	return makeReflectType(rtype{types.NewSlice(args[0].(iface).v.(rtype).t)})
+}
+
 func ext۰reflect۰TypeOf(fr *frame, args []value) value {
-	// Signature: func (t reflect.rtype) string
+	// Signature: func (t reflect.rtype) Type
 	return makeReflectType(rtype{args[0].(iface).t})
 }
 
@@ -159,6 +176,12 @@ func ext۰reflect۰ValueOf(fr *frame, args []value) value {
 	// Signature: func (interface{}) reflect.Value
 	itf := args[0].(iface)
 	return makeReflectValue(itf.t, itf.v)
+}
+
+func ext۰reflect۰Zero(fr *frame, args []value) value {
+	// Signature: func (t reflect.Type) reflect.Value
+	t := args[0].(iface).v.(rtype).t
+	return makeReflectValue(t, zero(t))
 }
 
 func reflectKind(t types.Type) reflect.Kind {
@@ -490,7 +513,7 @@ func newMethod(pkg *ssa.Package, recvType types.Type, name string) *ssa.Function
 	// that is needed is the "pointerness" of Recv.Type, and for
 	// now, we'll set it to always be false since we're only
 	// concerned with rtype.  Encapsulate this better.
-	sig := types.NewSignature(nil, types.NewVar(token.NoPos, nil, "recv", recvType), nil, nil, false)
+	sig := types.NewSignature(types.NewVar(token.NoPos, nil, "recv", recvType), nil, nil, false)
 	fn := pkg.Prog.NewFunction(name, sig, "fake reflect method")
 	fn.Pkg = pkg
 	return fn
@@ -499,16 +522,48 @@ func newMethod(pkg *ssa.Package, recvType types.Type, name string) *ssa.Function
 func initReflect(i *interpreter) {
 	i.reflectPackage = &ssa.Package{
 		Prog:    i.prog,
-		Object:  reflectTypesPackage,
+		Pkg:     reflectTypesPackage,
 		Members: make(map[string]ssa.Member),
+	}
+
+	// Clobber the type-checker's notion of reflect.Value's
+	// underlying type so that it more closely matches the fake one
+	// (at least in the number of fields---we lie about the type of
+	// the rtype field).
+	//
+	// We must ensure that calls to (ssa.Value).Type() return the
+	// fake type so that correct "shape" is used when allocating
+	// variables, making zero values, loading, and storing.
+	//
+	// TODO(adonovan): obviously this is a hack.  We need a cleaner
+	// way to fake the reflect package (almost---DeepEqual is fine).
+	// One approach would be not to even load its source code, but
+	// provide fake source files.  This would guarantee that no bad
+	// information leaks into other packages.
+	if r := i.prog.ImportedPackage("reflect"); r != nil {
+		rV := r.Pkg.Scope().Lookup("Value").Type().(*types.Named)
+
+		// delete bodies of the old methods
+		mset := i.prog.MethodSets.MethodSet(rV)
+		for j := 0; j < mset.Len(); j++ {
+			i.prog.MethodValue(mset.At(j)).Blocks = nil
+		}
+
+		tEface := types.NewInterface(nil, nil).Complete()
+		rV.SetUnderlying(types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, r.Pkg, "t", tEface, false), // a lie
+			types.NewField(token.NoPos, r.Pkg, "v", tEface, false),
+		}, nil))
 	}
 
 	i.rtypeMethods = methodSet{
 		"Bits":      newMethod(i.reflectPackage, rtypeType, "Bits"),
 		"Elem":      newMethod(i.reflectPackage, rtypeType, "Elem"),
 		"Field":     newMethod(i.reflectPackage, rtypeType, "Field"),
+		"In":        newMethod(i.reflectPackage, rtypeType, "In"),
 		"Kind":      newMethod(i.reflectPackage, rtypeType, "Kind"),
 		"NumField":  newMethod(i.reflectPackage, rtypeType, "NumField"),
+		"NumIn":     newMethod(i.reflectPackage, rtypeType, "NumIn"),
 		"NumMethod": newMethod(i.reflectPackage, rtypeType, "NumMethod"),
 		"NumOut":    newMethod(i.reflectPackage, rtypeType, "NumOut"),
 		"Out":       newMethod(i.reflectPackage, rtypeType, "Out"),

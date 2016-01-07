@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build linux darwin windows
 // +build gldebug
 
 package gl
@@ -9,21 +10,6 @@ package gl
 // Alternate versions of the types defined in types.go with extra
 // debugging information attached. For documentation, see types.go.
 
-/*
-#cgo darwin  LDFLAGS: -framework OpenGL
-#cgo linux   LDFLAGS: -lGLESv2
-#cgo darwin  CFLAGS: -DGOOS_darwin
-#cgo linux   CFLAGS: -DGOOS_linux
-
-#ifdef GOOS_linux
-#include <GLES2/gl2.h>
-#endif
-
-#ifdef GOOS_darwin
-#include <OpenGL/gl3.h>
-#endif
-*/
-import "C"
 import "fmt"
 
 type Enum uint32
@@ -34,6 +20,7 @@ type Attrib struct {
 }
 
 type Program struct {
+	Init  bool
 	Value uint32
 }
 
@@ -62,15 +49,22 @@ type Uniform struct {
 	name  string
 }
 
-func (v Attrib) c() C.GLuint       { return C.GLuint(v.Value) }
-func (v Enum) c() C.GLenum         { return C.GLenum(v) }
-func (v Program) c() C.GLuint      { return C.GLuint(v.Value) }
-func (v Shader) c() C.GLuint       { return C.GLuint(v.Value) }
-func (v Buffer) c() C.GLuint       { return C.GLuint(v.Value) }
-func (v Framebuffer) c() C.GLuint  { return C.GLuint(v.Value) }
-func (v Renderbuffer) c() C.GLuint { return C.GLuint(v.Value) }
-func (v Texture) c() C.GLuint      { return C.GLuint(v.Value) }
-func (v Uniform) c() C.GLint       { return C.GLint(v.Value) }
+func (v Attrib) c() uintptr { return uintptr(v.Value) }
+func (v Enum) c() uintptr   { return uintptr(v) }
+func (v Program) c() uintptr {
+	if !v.Init {
+		ret := uintptr(0)
+		ret--
+		return ret
+	}
+	return uintptr(v.Value)
+}
+func (v Shader) c() uintptr       { return uintptr(v.Value) }
+func (v Buffer) c() uintptr       { return uintptr(v.Value) }
+func (v Framebuffer) c() uintptr  { return uintptr(v.Value) }
+func (v Renderbuffer) c() uintptr { return uintptr(v.Value) }
+func (v Texture) c() uintptr      { return uintptr(v.Value) }
+func (v Uniform) c() uintptr      { return uintptr(v.Value) }
 
 func (v Attrib) String() string       { return fmt.Sprintf("Attrib(%d:%s)", v.Value, v.name) }
 func (v Program) String() string      { return fmt.Sprintf("Program(%d)", v.Value) }

@@ -2,7 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build !windows,!plan9
+// +build go1.5
+
+// +build !android,!windows,!plan9
 
 package interp_test
 
@@ -10,6 +12,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/build"
+	"go/types"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,7 +22,7 @@ import (
 	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/interp"
-	"golang.org/x/tools/go/types"
+	"golang.org/x/tools/go/ssa/ssautil"
 )
 
 // Each line contains a space-separated list of $GOROOT/test/
@@ -146,6 +149,7 @@ var testdataTests = []string{
 	"mrvchain.go",
 	"range.go",
 	"recover.go",
+	"reflect.go",
 	"static.go",
 	"callstack.go",
 }
@@ -153,23 +157,22 @@ var testdataTests = []string{
 // These are files and packages in $GOROOT/src/.
 var gorootSrcTests = []string{
 	"encoding/ascii85",
-	"encoding/csv",
 	"encoding/hex",
-	"encoding/pem",
-	"hash/crc32",
-	// "testing", // TODO(adonovan): implement runtime.Goexit correctly
-	"text/scanner",
-	"unicode",
+	// "encoding/pem", // TODO(adonovan): implement (reflect.Value).SetString
+	// "testing",      // TODO(adonovan): implement runtime.Goexit correctly
+	// "hash/crc32",   // TODO(adonovan): implement hash/crc32.haveCLMUL
+	// "log",          // TODO(adonovan): implement runtime.Callers correctly
 
 	// Too slow:
 	// "container/ring",
 	// "hash/adler32",
 
-	// TODO(adonovan): packages with Examples require os.Pipe (unimplemented):
-	// "unicode/utf8",
-	// "log",
-	// "path",
-	// "flag",
+	"unicode/utf8",
+	"path",
+	"flag",
+	"encoding/csv",
+	"text/scanner",
+	"unicode",
 }
 
 type successPredicate func(exitcode int, output string) error
@@ -187,7 +190,7 @@ func run(t *testing.T, dir, input string, success successPredicate) bool {
 		inputs = append(inputs, i)
 	}
 
-	conf := loader.Config{SourceImports: true}
+	var conf loader.Config
 	if _, err := conf.FromArgs(inputs, true); err != nil {
 		t.Errorf("FromArgs(%s) failed: %s", inputs, err)
 		return false
@@ -208,7 +211,7 @@ func run(t *testing.T, dir, input string, success successPredicate) bool {
 		interp.CapturedOutput = nil
 	}()
 
-	hint = fmt.Sprintf("To dump SSA representation, run:\n%% go build golang.org/x/tools/cmd/ssadump && ./ssadump -build=CFP %s\n", input)
+	hint = fmt.Sprintf("To dump SSA representation, run:\n%% go build golang.org/x/tools/cmd/ssadump && ./ssadump -test -build=CFP %s\n", input)
 
 	iprog, err := conf.Load()
 	if err != nil {
@@ -216,8 +219,8 @@ func run(t *testing.T, dir, input string, success successPredicate) bool {
 		return false
 	}
 
-	prog := ssa.Create(iprog, ssa.SanityCheckFunctions)
-	prog.BuildAll()
+	prog := ssautil.CreateProgram(iprog, ssa.SanityCheckFunctions)
+	prog.Build()
 
 	var mainPkg *ssa.Package
 	var initialPkgs []*ssa.Package
@@ -276,10 +279,12 @@ func printFailures(failures []string) {
 	}
 }
 
-// The "normal" success predicate.
-func exitsZero(exitcode int, _ string) error {
+func success(exitcode int, output string) error {
 	if exitcode != 0 {
 		return fmt.Errorf("exit code was %d", exitcode)
+	}
+	if strings.Contains(output, "BUG") {
+		return fmt.Errorf("exited zero but output contained 'BUG'")
 	}
 	return nil
 }
@@ -287,8 +292,13 @@ func exitsZero(exitcode int, _ string) error {
 // TestTestdataFiles runs the interpreter on testdata/*.go.
 func TestTestdataFiles(t *testing.T) {
 	var failures []string
+	start := time.Now()
 	for _, input := range testdataTests {
-		if !run(t, "testdata"+slash, input, exitsZero) {
+		if testing.Short() && time.Since(start) > 30*time.Second {
+			printFailures(failures)
+			t.Skipf("timeout - aborting test")
+		}
+		if !run(t, "testdata"+slash, input, success) {
 			failures = append(failures, input)
 		}
 	}
@@ -298,21 +308,11 @@ func TestTestdataFiles(t *testing.T) {
 // TestGorootTest runs the interpreter on $GOROOT/test/*.go.
 func TestGorootTest(t *testing.T) {
 	if testing.Short() {
-		return // too slow (~30s)
+		t.Skip() // too slow (~30s)
 	}
 
 	var failures []string
 
-	// $GOROOT/tests are also considered a failure if they print "BUG".
-	success := func(exitcode int, output string) error {
-		if exitcode != 0 {
-			return fmt.Errorf("exit code was %d", exitcode)
-		}
-		if strings.Contains(output, "BUG") {
-			return fmt.Errorf("exited zero but output contained 'BUG'")
-		}
-		return nil
-	}
 	for _, input := range gorootTestTests {
 		if !run(t, filepath.Join(build.Default.GOROOT, "test")+slash, input, success) {
 			failures = append(failures, input)
@@ -328,6 +328,10 @@ func TestGorootTest(t *testing.T) {
 
 // TestTestmainPackage runs the interpreter on a synthetic "testmain" package.
 func TestTestmainPackage(t *testing.T) {
+	if testing.Short() {
+		t.Skip() // too slow on some platforms
+	}
+
 	success := func(exitcode int, output string) error {
 		if exitcode == 0 {
 			return fmt.Errorf("unexpected success")
@@ -347,14 +351,12 @@ func TestTestmainPackage(t *testing.T) {
 // CreateTestMainPackage should return nil if there were no tests.
 func TestNullTestmainPackage(t *testing.T) {
 	var conf loader.Config
-	if err := conf.CreateFromFilenames("", "testdata/b_test.go"); err != nil {
-		t.Fatalf("ParseFile failed: %s", err)
-	}
+	conf.CreateFromFilenames("", "testdata/b_test.go")
 	iprog, err := conf.Load()
 	if err != nil {
 		t.Fatalf("CreatePackages failed: %s", err)
 	}
-	prog := ssa.Create(iprog, ssa.SanityCheckFunctions)
+	prog := ssautil.CreateProgram(iprog, ssa.SanityCheckFunctions)
 	mainPkg := prog.Package(iprog.Created[0].Pkg)
 	if mainPkg.Func("main") != nil {
 		t.Fatalf("unexpected main function")

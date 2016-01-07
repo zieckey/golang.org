@@ -18,73 +18,108 @@ sudo apt-get install libegl1-mesa-dev libgles2-mesa-dev libx11-dev
 /*
 #cgo LDFLAGS: -lEGL -lGLESv2 -lX11
 
-void runApp(void);
+void createWindow(void);
+void processEvents(void);
+void swapBuffers(void);
 */
 import "C"
 import (
 	"runtime"
-	"sync"
+	"time"
 
-	"golang.org/x/mobile/event"
+	"golang.org/x/mobile/event/lifecycle"
+	"golang.org/x/mobile/event/paint"
+	"golang.org/x/mobile/event/size"
+	"golang.org/x/mobile/event/touch"
 	"golang.org/x/mobile/geom"
 )
 
-var cb Callbacks
+func init() {
+	theApp.registerGLViewportFilter()
+}
 
-func run(callbacks Callbacks) {
+func main(f func(App)) {
 	runtime.LockOSThread()
-	cb = callbacks
-	C.runApp()
+
+	workAvailable := theApp.worker.WorkAvailable()
+
+	C.createWindow()
+
+	// TODO: send lifecycle events when e.g. the X11 window is iconified or moved off-screen.
+	theApp.sendLifecycle(lifecycle.StageFocused)
+
+	// TODO: translate X11 expose events to shiny paint events, instead of
+	// sending this synthetic paint event as a hack.
+	theApp.eventsIn <- paint.Event{}
+
+	donec := make(chan struct{})
+	go func() {
+		f(theApp)
+		close(donec)
+	}()
+
+	// TODO: can we get the actual vsync signal?
+	ticker := time.NewTicker(time.Second / 60)
+	defer ticker.Stop()
+	var tc <-chan time.Time
+
+	for {
+		select {
+		case <-donec:
+			return
+		case <-workAvailable:
+			theApp.worker.DoWork()
+		case <-theApp.publish:
+			C.swapBuffers()
+			tc = ticker.C
+		case <-tc:
+			tc = nil
+			theApp.publishResult <- PublishResult{}
+		}
+		C.processEvents()
+	}
 }
 
 //export onResize
 func onResize(w, h int) {
-	// TODO(nigeltao): don't assume 72 DPI. DisplayWidth / DisplayWidthMM
+	// TODO(nigeltao): don't assume 72 DPI. DisplayWidth and DisplayWidthMM
 	// is probably the best place to start looking.
-	geom.PixelsPerPt = 1
-	geom.Width = geom.Pt(w)
-	geom.Height = geom.Pt(h)
+	pixelsPerPt := float32(1)
+	theApp.eventsIn <- size.Event{
+		WidthPx:     w,
+		HeightPx:    h,
+		WidthPt:     geom.Pt(w),
+		HeightPt:    geom.Pt(h),
+		PixelsPerPt: pixelsPerPt,
+	}
 }
 
-var events struct {
-	sync.Mutex
-	pending []event.Touch
+func sendTouch(t touch.Type, x, y float32) {
+	theApp.eventsIn <- touch.Event{
+		X:        x,
+		Y:        y,
+		Sequence: 0, // TODO: button??
+		Type:     t,
+	}
 }
 
-func sendTouch(ty event.TouchType, x, y float32) {
-	events.Lock()
-	events.pending = append(events.pending, event.Touch{
-		Type: ty,
-		Loc: geom.Point{
-			X: geom.Pt(x),
-			Y: geom.Pt(y),
-		},
-	})
-	events.Unlock()
-}
-
-//export onTouchStart
-func onTouchStart(x, y float32) { sendTouch(event.TouchStart, x, y) }
+//export onTouchBegin
+func onTouchBegin(x, y float32) { sendTouch(touch.TypeBegin, x, y) }
 
 //export onTouchMove
-func onTouchMove(x, y float32) { sendTouch(event.TouchMove, x, y) }
+func onTouchMove(x, y float32) { sendTouch(touch.TypeMove, x, y) }
 
 //export onTouchEnd
-func onTouchEnd(x, y float32) { sendTouch(event.TouchEnd, x, y) }
+func onTouchEnd(x, y float32) { sendTouch(touch.TypeEnd, x, y) }
 
-//export onDraw
-func onDraw() {
-	events.Lock()
-	pending := events.pending
-	events.pending = nil
-	events.Unlock()
+var stopped bool
 
-	for _, e := range pending {
-		if cb.Touch != nil {
-			cb.Touch(e)
-		}
+//export onStop
+func onStop() {
+	if stopped {
+		return
 	}
-	if cb.Draw != nil {
-		cb.Draw()
-	}
+	stopped = true
+	theApp.sendLifecycle(lifecycle.StageDead)
+	theApp.eventsIn <- stopPumping{}
 }

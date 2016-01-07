@@ -2,25 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build linux darwin windows
 // +build !gldebug
 
 package gl
 
-/*
-#cgo darwin  LDFLAGS: -framework OpenGL
-#cgo linux   LDFLAGS: -lGLESv2
-#cgo darwin  CFLAGS: -DGOOS_darwin
-#cgo linux   CFLAGS: -DGOOS_linux
-
-#ifdef GOOS_linux
-#include <GLES2/gl2.h>
-#endif
-
-#ifdef GOOS_darwin
-#include <OpenGL/gl3.h>
-#endif
-*/
-import "C"
 import "fmt"
 
 // Enum is equivalent to GLenum, and is normally used with one of the
@@ -30,13 +16,16 @@ type Enum uint32
 // Types are defined a structs so that in debug mode they can carry
 // extra information, such as a string name. See typesdebug.go.
 
-// Attrib is an attribute index.
+// Attrib identifies the location of a specific attribute variable.
 type Attrib struct {
 	Value uint
 }
 
 // Program identifies a compiled shader program.
 type Program struct {
+	// Init is set by CreateProgram, as some GL drivers (in particular,
+	// ANGLE) return true for glIsProgram(0).
+	Init  bool
 	Value uint32
 }
 
@@ -65,22 +54,29 @@ type Texture struct {
 	Value uint32
 }
 
-// A Uniform identifies a GL uniform attribute value.
+// Uniform identifies the location of a specific uniform variable.
 type Uniform struct {
 	Value int32
 }
 
-func (v Attrib) c() C.GLuint       { return C.GLuint(v.Value) }
-func (v Enum) c() C.GLenum         { return C.GLenum(v) }
-func (v Program) c() C.GLuint      { return C.GLuint(v.Value) }
-func (v Shader) c() C.GLuint       { return C.GLuint(v.Value) }
-func (v Buffer) c() C.GLuint       { return C.GLuint(v.Value) }
-func (v Framebuffer) c() C.GLuint  { return C.GLuint(v.Value) }
-func (v Renderbuffer) c() C.GLuint { return C.GLuint(v.Value) }
-func (v Texture) c() C.GLuint      { return C.GLuint(v.Value) }
-func (v Uniform) c() C.GLint       { return C.GLint(v.Value) }
+func (v Attrib) c() uintptr { return uintptr(v.Value) }
+func (v Enum) c() uintptr   { return uintptr(v) }
+func (v Program) c() uintptr {
+	if !v.Init {
+		ret := uintptr(0)
+		ret--
+		return ret
+	}
+	return uintptr(v.Value)
+}
+func (v Shader) c() uintptr       { return uintptr(v.Value) }
+func (v Buffer) c() uintptr       { return uintptr(v.Value) }
+func (v Framebuffer) c() uintptr  { return uintptr(v.Value) }
+func (v Renderbuffer) c() uintptr { return uintptr(v.Value) }
+func (v Texture) c() uintptr      { return uintptr(v.Value) }
+func (v Uniform) c() uintptr      { return uintptr(v.Value) }
 
-func (v Attrib) String() string       { return fmt.Sprintf("Attrib(%d)", v) }
+func (v Attrib) String() string       { return fmt.Sprintf("Attrib(%d)", v.Value) }
 func (v Program) String() string      { return fmt.Sprintf("Program(%d)", v.Value) }
 func (v Shader) String() string       { return fmt.Sprintf("Shader(%d)", v.Value) }
 func (v Buffer) String() string       { return fmt.Sprintf("Buffer(%d)", v.Value) }

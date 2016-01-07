@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package ssa
 
 // This file defines a number of miscellaneous utility functions.
@@ -10,29 +12,16 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"go/types"
 	"io"
 	"os"
 
-	"golang.org/x/tools/go/types"
+	"golang.org/x/tools/go/ast/astutil"
 )
-
-func unreachable() {
-	panic("unreachable")
-}
 
 //// AST utilities
 
-// unparen returns e with any enclosing parentheses stripped.
-func unparen(e ast.Expr) ast.Expr {
-	for {
-		p, ok := e.(*ast.ParenExpr)
-		if !ok {
-			break
-		}
-		e = p.X
-	}
-	return e
-}
+func unparen(e ast.Expr) ast.Expr { return astutil.Unparen(e) }
 
 // isBlankIdent returns true iff e is an Ident with name "_".
 // They have no associated types.Object, and thus no type.
@@ -50,11 +39,7 @@ func isPointer(typ types.Type) bool {
 	return ok
 }
 
-// isInterface reports whether T's underlying type is an interface.
-func isInterface(T types.Type) bool {
-	_, ok := T.Underlying().(*types.Interface)
-	return ok
-}
+func isInterface(T types.Type) bool { return types.IsInterface(T) }
 
 // deref returns a pointer's element type; otherwise it returns typ.
 func deref(typ types.Type) types.Type {
@@ -131,6 +116,6 @@ func makeLen(T types.Type) *Builtin {
 	lenParams := types.NewTuple(anonVar(T))
 	return &Builtin{
 		name: "len",
-		sig:  types.NewSignature(nil, nil, lenParams, lenResults, false),
+		sig:  types.NewSignature(nil, lenParams, lenResults, false),
 	}
 }

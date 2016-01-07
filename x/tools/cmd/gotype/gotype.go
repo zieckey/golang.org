@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package main
 
 import (
@@ -9,18 +11,15 @@ import (
 	"fmt"
 	"go/ast"
 	"go/build"
+	"go/importer"
 	"go/parser"
 	"go/scanner"
 	"go/token"
+	"go/types"
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
-
-	"golang.org/x/tools/go/gccgoimporter"
-	_ "golang.org/x/tools/go/gcimporter"
-	"golang.org/x/tools/go/types"
 )
 
 var (
@@ -186,6 +185,10 @@ func getPkgFiles(args []string) ([]*ast.File, error) {
 }
 
 func checkPkgFiles(files []*ast.File) {
+	compiler := "gc"
+	if *gccgo {
+		compiler = "gccgo"
+	}
 	type bailout struct{}
 	conf := types.Config{
 		FakeImportC: true,
@@ -195,12 +198,8 @@ func checkPkgFiles(files []*ast.File) {
 			}
 			report(err)
 		},
-		Sizes: sizes,
-	}
-	if *gccgo {
-		var inst gccgoimporter.GccgoInstallation
-		inst.InitFromDriver("gccgo")
-		conf.Import = inst.GetImporter(nil, nil)
+		Importer: importer.For(compiler, nil),
+		Sizes:    sizes,
 	}
 
 	defer func() {
@@ -233,8 +232,6 @@ func printStats(d time.Duration) {
 }
 
 func main() {
-	runtime.GOMAXPROCS(runtime.NumCPU()) // remove this once runtime is smarter
-
 	flag.Usage = usage
 	flag.Parse()
 	if *printAST || *printTrace {

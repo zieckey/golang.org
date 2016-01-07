@@ -6,9 +6,15 @@
 // Protocol version 6.
 //
 // The package provides IP-level socket options that allow
-// manipulation of IPv6 facilities.  The IPv6 and socket options for
-// IPv6 are defined in RFC 2460, RFC 3493, RFC 3542, RFC 3678 and RFC
-// 4607.
+// manipulation of IPv6 facilities.
+//
+// The IPv6 protocol is defined in RFC 2460.
+// Basic and advanced socket interface extensions are defined in RFC
+// 3493 and RFC 3542.
+// Socket interface extensions for multicast source filters are
+// defined in RFC 3678.
+// MLDv1 and MLDv2 are defined in RFC 2710 and RFC 3810.
+// Source-specific multicast is defined in RFC 4607.
 //
 //
 // Unicasting
@@ -36,7 +42,7 @@
 // The outgoing packets will be labeled DiffServ assured forwarding
 // class 1 low drop precedence, known as AF11 packets.
 //
-//			if err := ipv6.NewConn(c).SetTrafficClass(DiffServAF11); err != nil {
+//			if err := ipv6.NewConn(c).SetTrafficClass(0x28); err != nil {
 //				// error handling
 //			}
 //			if _, err := c.Write(data); err != nil {
@@ -108,7 +114,7 @@
 //			// error handling
 //		}
 //		if rcm.Dst.IsMulticast() {
-//			if rcm.Dst.Equal(group)
+//			if rcm.Dst.Equal(group) {
 //				// joined group, do something
 //			} else {
 //				// unknown group, discard
@@ -118,13 +124,13 @@
 //
 // The application can also send both unicast and multicast packets.
 //
-//		p.SetTrafficClass(DiffServCS0)
+//		p.SetTrafficClass(0x0)
 //		p.SetHopLimit(16)
 //		if _, err := p.WriteTo(data[:n], nil, src); err != nil {
 //			// error handling
 //		}
 //		dst := &net.UDPAddr{IP: group, Port: 1024}
-//		wcm := ipv6.ControlMessage{TrafficClass: DiffServCS7, HopLimit: 1}
+//		wcm := ipv6.ControlMessage{TrafficClass: 0xe0, HopLimit: 1}
 //		for _, ifi := range []*net.Interface{en0, en1} {
 //			wcm.IfIndex = ifi.Index
 //			if _, err := p.WriteTo(data[:n], &wcm, dst); err != nil {
@@ -196,8 +202,8 @@
 // Source-specific multicasting
 //
 // An application that uses PacketConn on MLDv2 supported platform is
-// able to join source-specific multicast groups as described in RFC
-// 3678.  The application may use JoinSourceSpecificGroup and
+// able to join source-specific multicast groups.
+// The application may use JoinSourceSpecificGroup and
 // LeaveSourceSpecificGroup for the operation known as "include" mode,
 //
 //	ssmgroup := net.UDPAddr{IP: net.ParseIP("ff32::8000:9")}

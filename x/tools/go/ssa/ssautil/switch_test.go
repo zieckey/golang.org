@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// No testdata on Android.
+
+// +build !android
+
 package ssautil_test
 
 import (
@@ -29,7 +33,7 @@ func TestSwitches(t *testing.T) {
 		return
 	}
 
-	prog := ssa.Create(iprog, 0)
+	prog := ssautil.CreateProgram(iprog, 0)
 	mainPkg := prog.Package(iprog.Created[0].Pkg)
 	mainPkg.Build()
 

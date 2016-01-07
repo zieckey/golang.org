@@ -1,3 +1,11 @@
+// Copyright 2014 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// No testdata on Android.
+
+// +build !android
+
 package main
 
 import (
@@ -40,13 +48,13 @@ func TestCallgraph(t *testing.T) {
 		// tests: main is not called.
 		{"rta", format, true, []string{
 			`pkg.Example --> (pkg.C).f`,
-			`testmain.init --> pkg.init`,
+			`test$main.init --> pkg.init`,
 		}},
 		{"pta", format, true, []string{
 			`<root> --> pkg.Example`,
-			`<root> --> testmain.init`,
+			`<root> --> test$main.init`,
 			`pkg.Example --> (pkg.C).f`,
-			`testmain.init --> pkg.init`,
+			`test$main.init --> pkg.init`,
 		}},
 	} {
 		stdout = new(bytes.Buffer)

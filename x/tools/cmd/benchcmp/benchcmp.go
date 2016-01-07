@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"text/tabwriter"
+
+	"golang.org/x/tools/benchmark/parse"
 )
 
 var (
@@ -61,71 +63,71 @@ func main() {
 	var header bool // Has the header has been displayed yet for a given block?
 
 	if *magSort {
-		sort.Sort(ByDeltaNsOp(cmps))
+		sort.Sort(ByDeltaNsPerOp(cmps))
 	} else {
 		sort.Sort(ByParseOrder(cmps))
 	}
 	for _, cmp := range cmps {
-		if !cmp.Measured(NsOp) {
+		if !cmp.Measured(parse.NsPerOp) {
 			continue
 		}
-		if delta := cmp.DeltaNsOp(); !*changedOnly || delta.Changed() {
+		if delta := cmp.DeltaNsPerOp(); !*changedOnly || delta.Changed() {
 			if !header {
 				fmt.Fprint(w, "benchmark\told ns/op\tnew ns/op\tdelta\n")
 				header = true
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", cmp.Name(), formatNs(cmp.Before.NsOp), formatNs(cmp.After.NsOp), delta.Percent())
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", cmp.Name(), formatNs(cmp.Before.NsPerOp), formatNs(cmp.After.NsPerOp), delta.Percent())
 		}
 	}
 
 	header = false
 	if *magSort {
-		sort.Sort(ByDeltaMbS(cmps))
+		sort.Sort(ByDeltaMBPerS(cmps))
 	}
 	for _, cmp := range cmps {
-		if !cmp.Measured(MbS) {
+		if !cmp.Measured(parse.MBPerS) {
 			continue
 		}
-		if delta := cmp.DeltaMbS(); !*changedOnly || delta.Changed() {
+		if delta := cmp.DeltaMBPerS(); !*changedOnly || delta.Changed() {
 			if !header {
 				fmt.Fprint(w, "\nbenchmark\told MB/s\tnew MB/s\tspeedup\n")
 				header = true
 			}
-			fmt.Fprintf(w, "%s\t%.2f\t%.2f\t%s\n", cmp.Name(), cmp.Before.MbS, cmp.After.MbS, delta.Multiple())
+			fmt.Fprintf(w, "%s\t%.2f\t%.2f\t%s\n", cmp.Name(), cmp.Before.MBPerS, cmp.After.MBPerS, delta.Multiple())
 		}
 	}
 
 	header = false
 	if *magSort {
-		sort.Sort(ByDeltaAllocsOp(cmps))
+		sort.Sort(ByDeltaAllocsPerOp(cmps))
 	}
 	for _, cmp := range cmps {
-		if !cmp.Measured(AllocsOp) {
+		if !cmp.Measured(parse.AllocsPerOp) {
 			continue
 		}
-		if delta := cmp.DeltaAllocsOp(); !*changedOnly || delta.Changed() {
+		if delta := cmp.DeltaAllocsPerOp(); !*changedOnly || delta.Changed() {
 			if !header {
 				fmt.Fprint(w, "\nbenchmark\told allocs\tnew allocs\tdelta\n")
 				header = true
 			}
-			fmt.Fprintf(w, "%s\t%d\t%d\t%s\n", cmp.Name(), cmp.Before.AllocsOp, cmp.After.AllocsOp, delta.Percent())
+			fmt.Fprintf(w, "%s\t%d\t%d\t%s\n", cmp.Name(), cmp.Before.AllocsPerOp, cmp.After.AllocsPerOp, delta.Percent())
 		}
 	}
 
 	header = false
 	if *magSort {
-		sort.Sort(ByDeltaBOp(cmps))
+		sort.Sort(ByDeltaAllocedBytesPerOp(cmps))
 	}
 	for _, cmp := range cmps {
-		if !cmp.Measured(BOp) {
+		if !cmp.Measured(parse.AllocedBytesPerOp) {
 			continue
 		}
-		if delta := cmp.DeltaBOp(); !*changedOnly || delta.Changed() {
+		if delta := cmp.DeltaAllocedBytesPerOp(); !*changedOnly || delta.Changed() {
 			if !header {
 				fmt.Fprint(w, "\nbenchmark\told bytes\tnew bytes\tdelta\n")
 				header = true
 			}
-			fmt.Fprintf(w, "%s\t%d\t%d\t%s\n", cmp.Name(), cmp.Before.BOp, cmp.After.BOp, cmp.DeltaBOp().Percent())
+			fmt.Fprintf(w, "%s\t%d\t%d\t%s\n", cmp.Name(), cmp.Before.AllocedBytesPerOp, cmp.After.AllocedBytesPerOp, cmp.DeltaAllocedBytesPerOp().Percent())
 		}
 	}
 }
@@ -135,16 +137,37 @@ func fatal(msg interface{}) {
 	os.Exit(1)
 }
 
-func parseFile(path string) BenchSet {
+func parseFile(path string) parse.Set {
 	f, err := os.Open(path)
 	if err != nil {
 		fatal(err)
 	}
-	bb, err := ParseBenchSet(f)
+	defer f.Close()
+	bb, err := parse.ParseSet(f)
 	if err != nil {
 		fatal(err)
 	}
+	if *best {
+		selectBest(bb)
+	}
 	return bb
+}
+
+func selectBest(bs parse.Set) {
+	for name, bb := range bs {
+		if len(bb) < 2 {
+			continue
+		}
+		ord := bb[0].Ord
+		best := bb[0]
+		for _, b := range bb {
+			if b.NsPerOp < best.NsPerOp {
+				b.Ord = ord
+				best = b
+			}
+		}
+		bs[name] = []*parse.Benchmark{best}
+	}
 }
 
 // formatNs formats ns measurements to expose a useful amount of

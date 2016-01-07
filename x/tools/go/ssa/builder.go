@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package ssa
 
 // This file implements the BUILD phase of SSA construction.
@@ -32,13 +34,11 @@ package ssa
 import (
 	"fmt"
 	"go/ast"
+	exact "go/constant"
 	"go/token"
+	"go/types"
 	"os"
 	"sync"
-	"sync/atomic"
-
-	"golang.org/x/tools/go/exact"
-	"golang.org/x/tools/go/types"
 )
 
 type opaqueType struct {
@@ -241,6 +241,20 @@ func (b *builder) builtin(fn *Function, obj *types.Builtin, args []ast.Expr, typ
 			if len(args) == 3 {
 				m = b.expr(fn, args[2])
 			}
+			if m, ok := m.(*Const); ok {
+				// treat make([]T, n, m) as new([m]T)[:n]
+				cap := m.Int64()
+				at := types.NewArray(typ.Underlying().(*types.Slice).Elem(), cap)
+				alloc := emitNew(fn, at, pos)
+				alloc.Comment = "makeslice"
+				v := &Slice{
+					X:    alloc,
+					High: n,
+				}
+				v.setPos(pos)
+				v.setType(typ)
+				return fn.emit(v)
+			}
 			v := &MakeSlice{
 				Len: n,
 				Cap: m,
@@ -333,7 +347,7 @@ func (b *builder) addr(fn *Function, e ast.Expr, escaping bool) lvalue {
 		if v == nil {
 			v = fn.lookup(obj, escaping)
 		}
-		return &address{addr: v, expr: e}
+		return &address{addr: v, pos: e.Pos(), expr: e}
 
 	case *ast.CompositeLit:
 		t := deref(fn.Pkg.typeOf(e))
@@ -344,8 +358,10 @@ func (b *builder) addr(fn *Function, e ast.Expr, escaping bool) lvalue {
 			v = fn.addLocal(t, e.Lbrace)
 		}
 		v.Comment = "complit"
-		b.compLit(fn, v, e, true) // initialize in place
-		return &address{addr: v, expr: e}
+		var sb storebuf
+		b.compLit(fn, v, e, true, &sb)
+		sb.emit(fn)
+		return &address{addr: v, pos: e.Lbrace, expr: e}
 
 	case *ast.ParenExpr:
 		return b.addr(fn, e.X, escaping)
@@ -364,6 +380,7 @@ func (b *builder) addr(fn *Function, e ast.Expr, escaping bool) lvalue {
 		last := len(sel.Index()) - 1
 		return &address{
 			addr: emitFieldSelection(fn, v, sel.Index()[last], true, e.Sel),
+			pos:  e.Sel.Pos(),
 			expr: e.Sel,
 		}
 
@@ -396,24 +413,48 @@ func (b *builder) addr(fn *Function, e ast.Expr, escaping bool) lvalue {
 		}
 		v.setPos(e.Lbrack)
 		v.setType(et)
-		return &address{addr: fn.emit(v), expr: e}
+		return &address{addr: fn.emit(v), pos: e.Lbrack, expr: e}
 
 	case *ast.StarExpr:
-		return &address{addr: b.expr(fn, e.X), starPos: e.Star, expr: e}
+		return &address{addr: b.expr(fn, e.X), pos: e.Star, expr: e}
 	}
 
 	panic(fmt.Sprintf("unexpected address expression: %T", e))
 }
 
-// exprInPlace emits to fn code to initialize the lvalue loc with the
-// value of expression e. If isZero is true, exprInPlace assumes that loc
-// holds the zero value for its type.
+type store struct {
+	lhs lvalue
+	rhs Value
+}
+
+type storebuf struct{ stores []store }
+
+func (sb *storebuf) store(lhs lvalue, rhs Value) {
+	sb.stores = append(sb.stores, store{lhs, rhs})
+}
+
+func (sb *storebuf) emit(fn *Function) {
+	for _, s := range sb.stores {
+		s.lhs.store(fn, s.rhs)
+	}
+}
+
+// assign emits to fn code to initialize the lvalue loc with the value
+// of expression e.  If isZero is true, assign assumes that loc holds
+// the zero value for its type.
 //
-// This is equivalent to loc.store(fn, b.expr(fn, e)) but may
-// generate better code in some cases, e.g. for composite literals
-// in an addressable location.
+// This is equivalent to loc.store(fn, b.expr(fn, e)), but may generate
+// better code in some cases, e.g., for composite literals in an
+// addressable location.
 //
-func (b *builder) exprInPlace(fn *Function, loc lvalue, e ast.Expr, isZero bool) {
+// If sb is not nil, assign generates code to evaluate expression e, but
+// not to update loc.  Instead, the necessary stores are appended to the
+// storebuf sb so that they can be executed later.  This allows correct
+// in-place update of existing variables when the RHS is a composite
+// literal that may reference parts of the LHS.
+//
+func (b *builder) assign(fn *Function, loc lvalue, e ast.Expr, isZero bool, sb *storebuf) {
+	// Can we initialize it in place?
 	if e, ok := unparen(e).(*ast.CompositeLit); ok {
 		// A CompositeLit never evaluates to a pointer,
 		// so if the type of the location is a pointer,
@@ -421,7 +462,12 @@ func (b *builder) exprInPlace(fn *Function, loc lvalue, e ast.Expr, isZero bool)
 		if _, ok := loc.(blank); !ok { // avoid calling blank.typ()
 			if isPointer(loc.typ()) {
 				ptr := b.addr(fn, e, true).address(fn)
-				loc.store(fn, ptr) // copy address
+				// copy address
+				if sb != nil {
+					sb.store(loc, ptr)
+				} else {
+					loc.store(fn, ptr)
+				}
 				return
 			}
 		}
@@ -432,14 +478,35 @@ func (b *builder) exprInPlace(fn *Function, loc lvalue, e ast.Expr, isZero bool)
 				// Can't in-place initialize an interface value.
 				// Fall back to copying.
 			} else {
+				// x = T{...} or x := T{...}
 				addr := loc.address(fn)
-				b.compLit(fn, addr, e, isZero) // in place
-				emitDebugRef(fn, e, addr, true)
+				if sb != nil {
+					b.compLit(fn, addr, e, isZero, sb)
+				} else {
+					var sb storebuf
+					b.compLit(fn, addr, e, isZero, &sb)
+					sb.emit(fn)
+				}
+
+				// Subtle: emit debug ref for aggregate types only;
+				// slice and map are handled by store ops in compLit.
+				switch loc.typ().Underlying().(type) {
+				case *types.Struct, *types.Array:
+					emitDebugRef(fn, e, addr, true)
+				}
+
 				return
 			}
 		}
 	}
-	loc.store(fn, b.expr(fn, e)) // copy value
+
+	// simple case: just copy
+	rhs := b.expr(fn, e)
+	if sb != nil {
+		sb.store(loc, rhs)
+	} else {
+		loc.store(fn, rhs)
+	}
 }
 
 // expr lowers a single-result expression e to SSA form, emitting code
@@ -585,7 +652,7 @@ func (b *builder) expr0(fn *Function, e ast.Expr, tv types.TypeAndValue) Value {
 		case *types.Basic, *types.Slice, *types.Pointer: // *array
 			x = b.expr(fn, e.X)
 		default:
-			unreachable()
+			panic("unreachable")
 		}
 		if e.High != nil {
 			high = b.expr(fn, e.High)
@@ -732,7 +799,7 @@ func (b *builder) stmtList(fn *Function, list []ast.Stmt) {
 // selections of sel.
 //
 // wantAddr requests that the result is an an address.  If
-// !sel.Indirect(), this may require that e be build in addr() mode; it
+// !sel.Indirect(), this may require that e be built in addr() mode; it
 // must thus be addressable.
 //
 // escaping is defined as per builder.addr().
@@ -765,10 +832,11 @@ func (b *builder) setCallFunc(fn *Function, e *ast.CallExpr, c *CallCommon) {
 		sel, ok := fn.Pkg.info.Selections[selector]
 		if ok && sel.Kind() == types.MethodVal {
 			obj := sel.Obj().(*types.Func)
-			wantAddr := isPointer(recvType(obj))
+			recv := recvType(obj)
+			wantAddr := isPointer(recv)
 			escaping := true
 			v := b.receiver(fn, selector.X, wantAddr, escaping, sel)
-			if isInterface(deref(v.Type())) {
+			if isInterface(recv) {
 				// Invoke-mode call.
 				c.Value = v
 				c.Method = obj
@@ -877,7 +945,7 @@ func (b *builder) emitCallArgs(fn *Function, sig *types.Signature, e *ast.CallEx
 				}
 				iaddr.setType(types.NewPointer(vt))
 				fn.emit(iaddr)
-				emitStore(fn, iaddr, arg)
+				emitStore(fn, iaddr, arg, arg.Pos())
 			}
 			s := &Slice{X: a}
 			s.setType(st)
@@ -922,7 +990,7 @@ func (b *builder) localValueSpec(fn *Function, spec *ast.ValueSpec) {
 				fn.addLocalForIdent(id)
 			}
 			lval := b.addr(fn, id, false) // non-escaping
-			b.exprInPlace(fn, lval, spec.Values[i], true)
+			b.assign(fn, lval, spec.Values[i], true, nil)
 		}
 
 	case len(spec.Values) == 0:
@@ -957,40 +1025,37 @@ func (b *builder) localValueSpec(fn *Function, spec *ast.ValueSpec) {
 //
 func (b *builder) assignStmt(fn *Function, lhss, rhss []ast.Expr, isDef bool) {
 	// Side effects of all LHSs and RHSs must occur in left-to-right order.
-	var lvals []lvalue
-	for _, lhs := range lhss {
+	lvals := make([]lvalue, len(lhss))
+	isZero := make([]bool, len(lhss))
+	for i, lhs := range lhss {
 		var lval lvalue = blank{}
 		if !isBlankIdent(lhs) {
 			if isDef {
 				if obj := fn.Pkg.info.Defs[lhs.(*ast.Ident)]; obj != nil {
 					fn.addNamedLocal(obj)
+					isZero[i] = true
 				}
 			}
 			lval = b.addr(fn, lhs, false) // non-escaping
 		}
-		lvals = append(lvals, lval)
+		lvals[i] = lval
 	}
 	if len(lhss) == len(rhss) {
-		// e.g. x, y = f(), g()
-		if len(lhss) == 1 {
-			// x = type{...}
-			// Optimization: in-place construction
-			// of composite literals.
-			b.exprInPlace(fn, lvals[0], rhss[0], false)
-		} else {
-			// Parallel assignment.  All reads must occur
-			// before all updates, precluding exprInPlace.
-			var rvals []Value
-			for _, rval := range rhss {
-				rvals = append(rvals, b.expr(fn, rval))
-			}
-			for i, lval := range lvals {
-				lval.store(fn, rvals[i])
-			}
+		// Simple assignment:   x     = f()        (!isDef)
+		// Parallel assignment: x, y  = f(), g()   (!isDef)
+		// or short var decl:   x, y := f(), g()   (isDef)
+		//
+		// In all cases, the RHSs may refer to the LHSs,
+		// so we need a storebuf.
+		var sb storebuf
+		for i := range rhss {
+			b.assign(fn, lvals[i], rhss[i], isZero[i], &sb)
 		}
+		sb.emit(fn)
 	} else {
 		// e.g. x, y = pos()
 		tuple := b.exprN(fn, rhss[0])
+		emitDebugRef(fn, rhss[0], tuple, false)
 		for i, lval := range lvals {
 			lval.store(fn, emitExtract(fn, tuple, i))
 		}
@@ -1015,32 +1080,44 @@ func (b *builder) arrayLen(fn *Function, elts []ast.Expr) int64 {
 }
 
 // compLit emits to fn code to initialize a composite literal e at
-// address addr with type typ, typically allocated by Alloc.
+// address addr with type typ.
+//
 // Nested composite literals are recursively initialized in place
 // where possible. If isZero is true, compLit assumes that addr
 // holds the zero value for typ.
+//
+// Because the elements of a composite literal may refer to the
+// variables being updated, as in the second line below,
+//	x := T{a: 1}
+//	x = T{a: x.a}
+// all the reads must occur before all the writes.  Thus all stores to
+// loc are emitted to the storebuf sb for later execution.
 //
 // A CompositeLit may have pointer type only in the recursive (nested)
 // case when the type name is implicit.  e.g. in []*T{{}}, the inner
 // literal has type *T behaves like &T{}.
 // In that case, addr must hold a T, not a *T.
 //
-func (b *builder) compLit(fn *Function, addr Value, e *ast.CompositeLit, isZero bool) {
+func (b *builder) compLit(fn *Function, addr Value, e *ast.CompositeLit, isZero bool, sb *storebuf) {
 	typ := deref(fn.Pkg.typeOf(e))
 	switch t := typ.Underlying().(type) {
 	case *types.Struct:
 		if !isZero && len(e.Elts) != t.NumFields() {
-			emitMemClear(fn, addr)
+			// memclear
+			sb.store(&address{addr, e.Lbrace, nil},
+				zeroValue(fn, deref(addr.Type())))
 			isZero = true
 		}
 		for i, e := range e.Elts {
 			fieldIndex := i
+			pos := e.Pos()
 			if kv, ok := e.(*ast.KeyValueExpr); ok {
 				fname := kv.Key.(*ast.Ident).Name
 				for i, n := 0, t.NumFields(); i < n; i++ {
 					sf := t.Field(i)
 					if sf.Name() == fname {
 						fieldIndex = i
+						pos = kv.Colon
 						e = kv.Value
 						break
 					}
@@ -1053,7 +1130,7 @@ func (b *builder) compLit(fn *Function, addr Value, e *ast.CompositeLit, isZero 
 			}
 			faddr.setType(types.NewPointer(sf.Type()))
 			fn.emit(faddr)
-			b.exprInPlace(fn, &address{addr: faddr, expr: e}, e, isZero)
+			b.assign(fn, &address{addr: faddr, pos: pos, expr: e}, e, isZero, sb)
 		}
 
 	case *types.Array, *types.Slice:
@@ -1065,21 +1142,23 @@ func (b *builder) compLit(fn *Function, addr Value, e *ast.CompositeLit, isZero 
 			alloc := emitNew(fn, at, e.Lbrace)
 			alloc.Comment = "slicelit"
 			array = alloc
-			isZero = true
 		case *types.Array:
 			at = t
 			array = addr
-		}
 
-		if !isZero && int64(len(e.Elts)) != at.Len() {
-			emitMemClear(fn, array)
-			isZero = true
+			if !isZero && int64(len(e.Elts)) != at.Len() {
+				// memclear
+				sb.store(&address{array, e.Lbrace, nil},
+					zeroValue(fn, deref(array.Type())))
+			}
 		}
 
 		var idx *Const
 		for _, e := range e.Elts {
+			pos := e.Pos()
 			if kv, ok := e.(*ast.KeyValueExpr); ok {
 				idx = b.expr(fn, kv.Key).(*Const)
+				pos = kv.Colon
 				e = kv.Value
 			} else {
 				var idxval int64
@@ -1094,30 +1173,61 @@ func (b *builder) compLit(fn *Function, addr Value, e *ast.CompositeLit, isZero 
 			}
 			iaddr.setType(types.NewPointer(at.Elem()))
 			fn.emit(iaddr)
-			b.exprInPlace(fn, &address{addr: iaddr, expr: e}, e, isZero)
+			if t != at { // slice
+				// backing array is unaliased => storebuf not needed.
+				b.assign(fn, &address{addr: iaddr, pos: pos, expr: e}, e, true, nil)
+			} else {
+				b.assign(fn, &address{addr: iaddr, pos: pos, expr: e}, e, true, sb)
+			}
 		}
+
 		if t != at { // slice
 			s := &Slice{X: array}
 			s.setPos(e.Lbrace)
 			s.setType(typ)
-			emitStore(fn, addr, fn.emit(s))
+			sb.store(&address{addr: addr, pos: e.Lbrace, expr: e}, fn.emit(s))
 		}
 
 	case *types.Map:
 		m := &MakeMap{Reserve: intConst(int64(len(e.Elts)))}
 		m.setPos(e.Lbrace)
 		m.setType(typ)
-		emitStore(fn, addr, fn.emit(m))
+		fn.emit(m)
 		for _, e := range e.Elts {
 			e := e.(*ast.KeyValueExpr)
-			loc := &element{
+
+			// If a key expression in a map literal is  itself a
+			// composite literal, the type may be omitted.
+			// For example:
+			//	map[*struct{}]bool{{}: true}
+			// An &-operation may be implied:
+			//	map[*struct{}]bool{&struct{}{}: true}
+			var key Value
+			if _, ok := unparen(e.Key).(*ast.CompositeLit); ok && isPointer(t.Key()) {
+				// A CompositeLit never evaluates to a pointer,
+				// so if the type of the location is a pointer,
+				// an &-operation is implied.
+				key = b.addr(fn, e.Key, true).address(fn)
+			} else {
+				key = b.expr(fn, e.Key)
+			}
+
+			loc := element{
 				m:   m,
-				k:   emitConv(fn, b.expr(fn, e.Key), t.Key()),
+				k:   emitConv(fn, key, t.Key()),
 				t:   t.Elem(),
 				pos: e.Colon,
 			}
-			b.exprInPlace(fn, loc, e.Value, true)
+
+			// We call assign() only because it takes care
+			// of any &-operation required in the recursive
+			// case, e.g.,
+			// map[int]*struct{}{0: {}} implies &struct{}{}.
+			// In-place update is of course impossible,
+			// and no storebuf is needed.
+			b.assign(fn, &loc, e.Value, true, nil)
 		}
+		sb.store(&address{addr: addr, pos: e.Lbrace, expr: e}, m)
 
 	default:
 		panic("unexpected CompositeLit type: " + t.String())
@@ -1323,7 +1433,7 @@ func (b *builder) typeCaseBody(fn *Function, cc *ast.CaseClause, x Value, done *
 		// In a single-type case, y has that type.
 		// In multi-type cases, 'case nil' and default,
 		// y has the same type as the interface operand.
-		emitStore(fn, fn.addNamedLocal(obj), x)
+		emitStore(fn, fn.addNamedLocal(obj), x, obj.Pos())
 	}
 	fn.targets = &targets{
 		tail:   fn.targets,
@@ -1574,8 +1684,9 @@ func (b *builder) forStmt(fn *Function, s *ast.ForStmt, label *lblock) {
 // rangeIndexed emits to fn the header for an integer-indexed loop
 // over array, *array or slice value x.
 // The v result is defined only if tv is non-nil.
+// forPos is the position of the "for" token.
 //
-func (b *builder) rangeIndexed(fn *Function, x Value, tv types.Type) (k, v Value, loop, done *BasicBlock) {
+func (b *builder) rangeIndexed(fn *Function, x Value, tv types.Type, pos token.Pos) (k, v Value, loop, done *BasicBlock) {
 	//
 	//      length = len(x)
 	//      index = -1
@@ -1609,7 +1720,7 @@ func (b *builder) rangeIndexed(fn *Function, x Value, tv types.Type) (k, v Value
 	}
 
 	index := fn.addLocal(tInt, token.NoPos)
-	emitStore(fn, index, intConst(-1))
+	emitStore(fn, index, intConst(-1), pos)
 
 	loop = fn.newBasicBlock("rangeindex.loop")
 	emitJump(fn, loop)
@@ -1621,7 +1732,7 @@ func (b *builder) rangeIndexed(fn *Function, x Value, tv types.Type) (k, v Value
 		Y:  vOne,
 	}
 	incr.setType(tInt)
-	emitStore(fn, index, fn.emit(incr))
+	emitStore(fn, index, fn.emit(incr), pos)
 
 	body := fn.newBasicBlock("rangeindex.body")
 	done = fn.newBasicBlock("rangeindex.done")
@@ -1800,10 +1911,10 @@ func (b *builder) rangeStmt(fn *Function, s *ast.RangeStmt, label *lblock) {
 	var loop, done *BasicBlock
 	switch rt := x.Type().Underlying().(type) {
 	case *types.Slice, *types.Array, *types.Pointer: // *array
-		k, v, loop, done = b.rangeIndexed(fn, x, tv)
+		k, v, loop, done = b.rangeIndexed(fn, x, tv, s.For)
 
 	case *types.Chan:
-		k, loop, done = b.rangeChan(fn, x, tk, s.TokPos)
+		k, loop, done = b.rangeChan(fn, x, tk, s.For)
 
 	case *types.Map, *types.Basic: // string
 		k, v, loop, done = b.rangeIter(fn, x, tk, tv, s.For)
@@ -1941,7 +2052,7 @@ start:
 			// Function has named result parameters (NRPs).
 			// Perform parallel assignment of return operands to NRPs.
 			for i, r := range results {
-				emitStore(fn, fn.namedResults[i], r)
+				emitStore(fn, fn.namedResults[i], r, s.Return)
 			}
 		}
 		// Run function calls deferred in this
@@ -2106,24 +2217,12 @@ func (b *builder) buildFuncDecl(pkg *Package, decl *ast.FuncDecl) {
 	if isBlankIdent(id) {
 		return // discard
 	}
-	var fn *Function
+	fn := pkg.values[pkg.info.Defs[id]].(*Function)
 	if decl.Recv == nil && id.Name == "init" {
-		pkg.ninit++
-		fn = &Function{
-			name:      fmt.Sprintf("init#%d", pkg.ninit),
-			Signature: new(types.Signature),
-			pos:       decl.Name.NamePos,
-			Pkg:       pkg,
-			Prog:      pkg.Prog,
-			syntax:    decl,
-		}
-
 		var v Call
 		v.Call.Value = fn
 		v.setType(types.NewTuple())
 		pkg.init.emit(&v)
-	} else {
-		fn = pkg.values[pkg.info.Defs[id]].(*Function)
 	}
 	b.buildFunction(fn)
 }
@@ -2131,9 +2230,12 @@ func (b *builder) buildFuncDecl(pkg *Package, decl *ast.FuncDecl) {
 // BuildAll calls Package.Build() for each package in prog.
 // Building occurs in parallel unless the BuildSerially mode flag was set.
 //
+// BuildAll is intended for whole-program analysis; a typical compiler
+// need only build a single package.
+//
 // BuildAll is idempotent and thread-safe.
 //
-func (prog *Program) BuildAll() {
+func (prog *Program) Build() {
 	var wg sync.WaitGroup
 	for _, p := range prog.packages {
 		if prog.mode&BuildSerially != 0 {
@@ -2157,14 +2259,13 @@ func (prog *Program) BuildAll() {
 //
 // Build is idempotent and thread-safe.
 //
-func (p *Package) Build() {
-	if !atomic.CompareAndSwapInt32(&p.started, 0, 1) {
-		return // already started
-	}
+func (p *Package) Build() { p.buildOnce.Do(p.build) }
+
+func (p *Package) build() {
 	if p.info == nil {
 		return // synthetic package, e.g. "testmain"
 	}
-	if len(p.info.Files) == 0 {
+	if p.files == nil {
 		p.info = nil
 		return // package loaded from export data
 	}
@@ -2174,7 +2275,7 @@ func (p *Package) Build() {
 	// that would require package creation in topological order.
 	for name, mem := range p.Members {
 		if ast.IsExported(name) {
-			p.needMethodsOf(mem.Type())
+			p.Prog.needMethodsOf(mem.Type())
 		}
 	}
 	if p.Prog.mode&LogSource != 0 {
@@ -2192,13 +2293,13 @@ func (p *Package) Build() {
 		done = init.newBasicBlock("init.done")
 		emitIf(init, emitLoad(init, initguard), done, doinit)
 		init.currentBlock = doinit
-		emitStore(init, initguard, vTrue)
+		emitStore(init, initguard, vTrue, token.NoPos)
 
 		// Call the init() function of each package we import.
-		for _, pkg := range p.info.Pkg.Imports() {
+		for _, pkg := range p.Pkg.Imports() {
 			prereq := p.Prog.packages[pkg]
 			if prereq == nil {
-				panic(fmt.Sprintf("Package(%q).Build(): unsatisfied import: Program.CreatePackage(%q) was not called", p.Object.Path(), pkg.Path()))
+				panic(fmt.Sprintf("Package(%q).Build(): unsatisfied import: Program.CreatePackage(%q) was not called", p.Pkg.Path(), pkg.Path()))
 			}
 			var v Call
 			v.Call.Value = prereq.init
@@ -2220,11 +2321,11 @@ func (p *Package) Build() {
 			// 1:1 initialization: var x, y = a(), b()
 			var lval lvalue
 			if v := varinit.Lhs[0]; v.Name() != "_" {
-				lval = &address{addr: p.values[v].(*Global)}
+				lval = &address{addr: p.values[v].(*Global), pos: v.Pos()}
 			} else {
 				lval = blank{}
 			}
-			b.exprInPlace(init, lval, varinit.Rhs, true)
+			b.assign(init, lval, varinit.Rhs, true, nil)
 		} else {
 			// n:1 initialization: var x, y :=  f()
 			tuple := b.exprN(init, varinit.Rhs)
@@ -2232,7 +2333,7 @@ func (p *Package) Build() {
 				if v.Name() == "_" {
 					continue
 				}
-				emitStore(init, p.values[v].(*Global), emitExtract(init, tuple, i))
+				emitStore(init, p.values[v].(*Global), emitExtract(init, tuple, i), v.Pos())
 			}
 		}
 	}
@@ -2240,7 +2341,7 @@ func (p *Package) Build() {
 	// Build all package-level functions, init functions
 	// and methods, including unreachable/blank ones.
 	// We build them in source order, but it's not significant.
-	for _, file := range p.info.Files {
+	for _, file := range p.files {
 		for _, decl := range file.Decls {
 			if decl, ok := decl.(*ast.FuncDecl); ok {
 				b.buildFuncDecl(p, decl)
@@ -2281,130 +2382,4 @@ func (p *Package) typeOf(e ast.Expr) types.Type {
 	}
 	panic(fmt.Sprintf("no type for %T @ %s",
 		e, p.Prog.Fset.Position(e.Pos())))
-}
-
-// needMethodsOf ensures that runtime type information (including the
-// complete method set) is available for the specified type T and all
-// its subcomponents.
-//
-// needMethodsOf must be called for at least every type that is an
-// operand of some MakeInterface instruction, and for the type of
-// every exported package member.
-//
-// Precondition: T is not a method signature (*Signature with Recv()!=nil).
-//
-// Thread-safe.  (Called via emitConv from multiple builder goroutines.)
-//
-// TODO(adonovan): make this faster.  It accounts for 20% of SSA build
-// time.  Do we need to maintain a distinct needRTTI and methodSets per
-// package?  Using just one in the program might be much faster.
-//
-func (p *Package) needMethodsOf(T types.Type) {
-	p.methodsMu.Lock()
-	p.needMethods(T, false)
-	p.methodsMu.Unlock()
-}
-
-// Precondition: T is not a method signature (*Signature with Recv()!=nil).
-// Precondition: the p.methodsMu lock is held.
-// Recursive case: skip => don't call makeMethods(T).
-func (p *Package) needMethods(T types.Type, skip bool) {
-	// Each package maintains its own set of types it has visited.
-	if prevSkip, ok := p.needRTTI.At(T).(bool); ok {
-		// needMethods(T) was previously called
-		if !prevSkip || skip {
-			return // already seen, with same or false 'skip' value
-		}
-	}
-	p.needRTTI.Set(T, skip)
-
-	// Prune the recursion if we find a named or *named type
-	// belonging to another package.
-	var n *types.Named
-	switch T := T.(type) {
-	case *types.Named:
-		n = T
-	case *types.Pointer:
-		n, _ = T.Elem().(*types.Named)
-	}
-	if n != nil {
-		owner := n.Obj().Pkg()
-		if owner == nil {
-			return // built-in error type
-		}
-		if owner != p.Object {
-			return // belongs to another package
-		}
-	}
-
-	// All the actual method sets live in the Program so that
-	// multiple packages can share a single copy in memory of the
-	// symbols that would be compiled into multiple packages (as
-	// weak symbols).
-	if !skip && p.Prog.makeMethods(T) {
-		p.methodSets = append(p.methodSets, T)
-	}
-
-	// Recursion over signatures of each method.
-	tmset := p.Prog.MethodSets.MethodSet(T)
-	for i := 0; i < tmset.Len(); i++ {
-		sig := tmset.At(i).Type().(*types.Signature)
-		p.needMethods(sig.Params(), false)
-		p.needMethods(sig.Results(), false)
-	}
-
-	switch t := T.(type) {
-	case *types.Basic:
-		// nop
-
-	case *types.Interface:
-		// nop---handled by recursion over method set.
-
-	case *types.Pointer:
-		p.needMethods(t.Elem(), false)
-
-	case *types.Slice:
-		p.needMethods(t.Elem(), false)
-
-	case *types.Chan:
-		p.needMethods(t.Elem(), false)
-
-	case *types.Map:
-		p.needMethods(t.Key(), false)
-		p.needMethods(t.Elem(), false)
-
-	case *types.Signature:
-		if t.Recv() != nil {
-			panic(fmt.Sprintf("Signature %s has Recv %s", t, t.Recv()))
-		}
-		p.needMethods(t.Params(), false)
-		p.needMethods(t.Results(), false)
-
-	case *types.Named:
-		// A pointer-to-named type can be derived from a named
-		// type via reflection.  It may have methods too.
-		p.needMethods(types.NewPointer(T), false)
-
-		// Consider 'type T struct{S}' where S has methods.
-		// Reflection provides no way to get from T to struct{S},
-		// only to S, so the method set of struct{S} is unwanted,
-		// so set 'skip' flag during recursion.
-		p.needMethods(t.Underlying(), true)
-
-	case *types.Array:
-		p.needMethods(t.Elem(), false)
-
-	case *types.Struct:
-		for i, n := 0, t.NumFields(); i < n; i++ {
-			p.needMethods(t.Field(i).Type(), false)
-		}
-
-	case *types.Tuple:
-		for i, n := 0, t.Len(); i < n; i++ {
-			p.needMethods(t.At(i).Type(), false)
-		}
-
-	default:
-		panic(T)
-	}
 }

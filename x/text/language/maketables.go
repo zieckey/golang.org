@@ -11,43 +11,27 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"flag"
 	"fmt"
-	"golang.org/x/text/cldr"
-	"hash"
-	"hash/fnv"
 	"io"
 	"io/ioutil"
 	"log"
 	"math"
-	"net/http"
-	"os"
-	"os/exec"
-	"path"
 	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+
+	"golang.org/x/text/internal/gen"
+	"golang.org/x/text/internal/tag"
+	"golang.org/x/text/unicode/cldr"
 )
 
 var (
-	url = flag.String("cldr",
-		"http://www.unicode.org/Public/cldr/"+cldr.Version+"/core.zip",
-		"URL of CLDR archive.")
-	iana = flag.String("iana",
-		"http://www.iana.org/assignments/language-subtag-registry",
-		"URL of IANA language subtag registry.")
-	tld = flag.String("tld",
-		"http://www.iana.org/domains/root/db",
-		"URL of IANA Root Zone Database")
 	test = flag.Bool("test",
 		false,
 		"test existing tables; can be used to compare web data with package data.")
-	localFiles = flag.String("local",
-		"",
-		"directory containing local data files; for debugging only.")
 	outputFile = flag.String("output",
 		"tables.go",
 		"output file for generated tables")
@@ -109,11 +93,6 @@ of the 3-letter ISO codes in altRegionISO3.`,
 	`
 variantNumSpecialized is the number of specialized variants in variants.`,
 	`
-currency holds an alphabetically sorted list of canonical 3-letter currency identifiers.
-Each identifier is followed by a byte of which the 6 most significant bits
-indicated the rounding and the least 2 significant bits indicate the
-number of decimal positions.`,
-	`
 suppressScript is an index from langID to the dominant script for that language,
 if it exists.  If a script is given, it should be suppressed from the language tag.`,
 	`
@@ -156,7 +135,7 @@ regionInclusionNext marks, for each entry in regionInclusionBits, the set of
 all groups that are reachable from the groups set in the respective entry.`,
 }
 
-// TODO: consider changing some of these strutures to tries. This can reduce
+// TODO: consider changing some of these structures to tries. This can reduce
 // memory, but may increase the need for memory allocations. This could be
 // mitigated if we can piggyback on language tags for common cases.
 
@@ -327,12 +306,10 @@ type ianaEntry struct {
 }
 
 type builder struct {
-	w      io.Writer   // multi writer
-	out    io.Writer   // set to output file.
-	hash32 hash.Hash32 // for checking whether tables have changed.
-	size   int
-	data   *cldr.CLDR
-	supp   *cldr.SupplementalData
+	w    *gen.CodeWriter
+	hw   io.Writer // MultiWriter for w and w.Hash
+	data *cldr.CLDR
+	supp *cldr.SupplementalData
 
 	// indices
 	locale      stringSet // common locales
@@ -341,7 +318,6 @@ type builder struct {
 	script      stringSet // 4-letter ISO codes
 	region      stringSet // 2-letter ISO or 3-digit UN M49 codes
 	variant     stringSet // 4-8-alphanumeric variant code.
-	currency    stringSet // 3-letter ISO currency codes
 
 	// Region codes that are groups with their corresponding group IDs.
 	groups map[int]index
@@ -352,45 +328,24 @@ type builder struct {
 
 type index uint
 
-func openReader(url string) io.ReadCloser {
-	if *localFiles != "" {
-		if !path.IsAbs(*localFiles) {
-			pwd, _ := os.Getwd()
-			*localFiles = path.Join(pwd, *localFiles)
-		}
-		url = "file://" + path.Join(*localFiles, path.Base(url))
-	}
-	t := &http.Transport{}
-	t.RegisterProtocol("file", http.NewFileTransport(http.Dir("/")))
-	c := &http.Client{Transport: t}
-	resp, err := c.Get(url)
-	failOnError(err)
-	if resp.StatusCode != 200 {
-		log.Fatalf(`bad GET status for "%s": %s`, url, resp.Status)
-	}
-	return resp.Body
-}
-
-func newBuilder(w io.Writer) *builder {
-	r := openReader(*url)
+func newBuilder(w *gen.CodeWriter) *builder {
+	r := gen.OpenCLDRCoreZip()
 	defer r.Close()
 	d := &cldr.Decoder{}
-	d.SetDirFilter("supplemental")
 	data, err := d.DecodeZip(r)
 	failOnError(err)
 	b := builder{
-		out:    w,
-		data:   data,
-		supp:   data.Supplemental(),
-		hash32: fnv.New32(),
+		w:    w,
+		hw:   io.MultiWriter(w, w.Hash),
+		data: data,
+		supp: data.Supplemental(),
 	}
-	b.w = io.MultiWriter(b.out, b.hash32)
 	b.parseRegistry()
 	return &b
 }
 
 func (b *builder) parseRegistry() {
-	r := openReader(*iana)
+	r := gen.OpenIANAFile("assignments/language-subtag-registry")
 	defer r.Close()
 	b.registry = make(map[string]*ianaEntry)
 
@@ -463,36 +418,35 @@ var commentIndex = make(map[string]string)
 func init() {
 	for _, s := range comment {
 		key := strings.TrimSpace(strings.SplitN(s, " ", 2)[0])
-		commentIndex[key] = strings.Replace(s, "\n", "\n// ", -1)
+		commentIndex[key] = s
 	}
 }
 
 func (b *builder) comment(name string) {
-	fmt.Fprintln(b.out, commentIndex[name])
+	if s := commentIndex[name]; len(s) > 0 {
+		b.w.WriteComment(s)
+	} else {
+		fmt.Fprintln(b.w)
+	}
 }
 
 func (b *builder) pf(f string, x ...interface{}) {
-	fmt.Fprintf(b.w, f, x...)
-	fmt.Fprint(b.w, "\n")
+	fmt.Fprintf(b.hw, f, x...)
+	fmt.Fprint(b.hw, "\n")
 }
 
 func (b *builder) p(x ...interface{}) {
-	fmt.Fprintln(b.w, x...)
+	fmt.Fprintln(b.hw, x...)
 }
 
 func (b *builder) addSize(s int) {
-	b.size += s
+	b.w.Size += s
 	b.pf("// Size: %d bytes", s)
-}
-
-func (b *builder) addArraySize(s, n int) {
-	b.size += s
-	b.pf("// Size: %d bytes, %d elements", s, n)
 }
 
 func (b *builder) writeConst(name string, x interface{}) {
 	b.comment(name)
-	b.pf("const %s = %v", name, x)
+	b.w.WriteConst(name, x)
 }
 
 // writeConsts computes f(v) for all v in values and writes the results
@@ -507,13 +461,8 @@ func (b *builder) writeConsts(f func(string) int, values ...string) {
 
 // writeType writes the type of the given value, which must be a struct.
 func (b *builder) writeType(value interface{}) {
-	t := reflect.TypeOf(value)
-	b.comment(t.Name())
-	b.pf("type %s struct {", t.Name())
-	for i := 0; i < t.NumField(); i++ {
-		b.pf("\t%s %s", t.Field(i).Name, t.Field(i).Type)
-	}
-	b.pf("}")
+	b.comment(reflect.TypeOf(value).Name())
+	b.w.WriteType(value)
 }
 
 func (b *builder) writeSlice(name string, ss interface{}) {
@@ -522,42 +471,14 @@ func (b *builder) writeSlice(name string, ss interface{}) {
 
 func (b *builder) writeSliceAddSize(name string, extraSize int, ss interface{}) {
 	b.comment(name)
+	b.w.Size += extraSize
 	v := reflect.ValueOf(ss)
 	t := v.Type().Elem()
-	tn := strings.Replace(fmt.Sprintf("%s", t), "main.", "", 1)
-	b.addArraySize(v.Len()*int(t.Size())+extraSize, v.Len())
-	fmt.Fprintf(b.w, `var %s = [%d]%s{`, name, v.Len(), tn)
-	for i := 0; i < v.Len(); i++ {
-		if t.Kind() == reflect.Struct {
-			line := fmt.Sprintf("\n\t%#v, ", v.Index(i).Interface())
-			line = strings.Replace(line, "main.", "", 1)
-			fmt.Fprintf(b.w, line)
-		} else {
-			if i%12 == 0 {
-				fmt.Fprintf(b.w, "\n\t")
-			}
-			fmt.Fprintf(b.w, "%d, ", v.Index(i).Interface())
-		}
-	}
-	b.p("\n}")
-}
+	b.pf("// Size: %d bytes, %d elements", v.Len()*int(t.Size())+extraSize, v.Len())
 
-// writeStringSlice writes a slice of strings. This produces a lot
-// of overhead. It should typically only be used for debugging.
-// TODO: remove
-func (b *builder) writeStringSlice(name string, ss []string) {
-	b.comment(name)
-	t := reflect.TypeOf(ss).Elem()
-	sz := len(ss) * int(t.Size())
-	for _, s := range ss {
-		sz += len(s)
-	}
-	b.addArraySize(sz, len(ss))
-	b.pf(`var %s = [%d]%s{`, name, len(ss), t)
-	for i := 0; i < len(ss); i++ {
-		b.pf("\t%q,", ss[i])
-	}
-	b.p("}")
+	fmt.Fprintf(b.w, "var %s = ", name)
+	b.w.WriteArray(ss)
+	b.p()
 }
 
 type fromTo struct {
@@ -573,38 +494,6 @@ func (b *builder) writeSortedMap(name string, ss *stringSet, index func(s string
 		m = append(m, fromTo{index(s), index(ss.update[s])})
 	}
 	b.writeSlice(name, m)
-}
-
-func (b *builder) writeString(name, s string) {
-	b.comment(name)
-	b.addSize(len(s) + int(reflect.TypeOf(s).Size()))
-	if len(s) < 40 {
-		b.pf(`var %s string = %q`, name, s)
-		return
-	}
-	const cpl = 60
-	b.pf(`var %s string = "" +`, name)
-	for {
-		n := cpl
-		if n > len(s) {
-			n = len(s)
-		}
-		var q string
-		for {
-			q = strconv.Quote(s[:n])
-			if len(q) <= cpl+2 {
-				break
-			}
-			n--
-		}
-		if n < len(s) {
-			b.pf(`	%s +`, q)
-			s = s[n:]
-		} else {
-			b.pf(`	%s`, q)
-			break
-		}
-	}
 }
 
 const base = 'z' - 'a' + 1
@@ -720,6 +609,29 @@ func (b *builder) parseIndices() {
 		}
 		ss.add(k)
 	}
+	// Include any language for which there is data.
+	for _, lang := range b.data.Locales() {
+		if x := b.data.RawLDML(lang); false ||
+			x.LocaleDisplayNames != nil ||
+			x.Characters != nil ||
+			x.Delimiters != nil ||
+			x.Measurement != nil ||
+			x.Dates != nil ||
+			x.Numbers != nil ||
+			x.Units != nil ||
+			x.ListPatterns != nil ||
+			x.Collations != nil ||
+			x.Segmentations != nil ||
+			x.Rbnf != nil ||
+			x.Annotations != nil ||
+			x.Metadata != nil {
+
+			from := strings.Split(lang, "_")
+			if lang := from[0]; lang != "root" {
+				b.lang.add(lang)
+			}
+		}
+	}
 	// Include languages in likely subtags.
 	for _, m := range b.supp.LikelySubtags.LikelySubtag {
 		from := strings.Split(m.From, "_")
@@ -737,12 +649,6 @@ func (b *builder) parseIndices() {
 			b.region.add(reg.Type)
 		}
 	}
-	// currency codes
-	for _, reg := range b.supp.CurrencyData.Region {
-		for _, cur := range reg.Currency {
-			b.currency.add(cur.Iso4217)
-		}
-	}
 
 	for _, s := range b.lang.s {
 		if len(s) == 3 {
@@ -757,7 +663,6 @@ func (b *builder) parseIndices() {
 	b.lang.add("---")
 	b.script.add("----")
 	b.region.add("---")
-	b.currency.add("---")
 
 	// common locales
 	b.locale.parse(meta.DefaultContent.Locales)
@@ -903,7 +808,7 @@ func (b *builder) writeLanguage() {
 		}
 		lang.s[i] += add
 	}
-	b.writeString("lang", lang.join())
+	b.writeConst("lang", tag.Index(lang.join()))
 
 	b.writeConst("langNoIndexOffset", len(b.lang.s))
 
@@ -918,7 +823,7 @@ func (b *builder) writeLanguage() {
 			altLangIndex = append(altLangIndex, uint16(idx))
 		}
 	}
-	b.writeString("altLangISO3", altLangISO3.join())
+	b.writeConst("altLangISO3", tag.Index(altLangISO3.join()))
 	b.writeSlice("altLangIndex", altLangIndex)
 
 	b.writeSortedMap("langAliasMap", &langAliasMap, b.langIndex)
@@ -936,7 +841,7 @@ var scriptConsts = []string{
 
 func (b *builder) writeScript() {
 	b.writeConsts(b.script.index, scriptConsts...)
-	b.writeString("script", b.script.join())
+	b.writeConst("script", tag.Index(b.script.join()))
 
 	supp := make([]uint8, len(b.lang.slice()))
 	for i, v := range b.lang.slice()[1:] {
@@ -955,13 +860,13 @@ func (b *builder) writeScript() {
 	}
 }
 
-func parseM49(s string) uint16 {
+func parseM49(s string) int16 {
 	if len(s) == 0 {
 		return 0
 	}
 	v, err := strconv.ParseUint(s, 10, 10)
 	failOnError(err)
-	return uint16(v)
+	return int16(v)
 }
 
 var regionConsts = []string{
@@ -973,8 +878,8 @@ func (b *builder) writeRegion() {
 	b.writeConsts(b.region.index, regionConsts...)
 
 	isoOffset := b.region.index("AA")
-	m49map := make([]uint16, len(b.region.slice()))
-	fromM49map := make(map[uint16]int)
+	m49map := make([]int16, len(b.region.slice()))
+	fromM49map := make(map[int16]int)
 	altRegionISO3 := ""
 	altRegionIDs := []uint16{}
 
@@ -1001,7 +906,7 @@ func (b *builder) writeRegion() {
 	}
 
 	// Is the region a valid ccTLD?
-	r := openReader(*tld)
+	r := gen.OpenIANAFile("domains/root/db")
 	defer r.Close()
 
 	buf, err := ioutil.ReadAll(r)
@@ -1086,8 +991,8 @@ func (b *builder) writeRegion() {
 			regionISO.s[i] = s + "  "
 		}
 	}
-	b.writeString("regionISO", regionISO.join())
-	b.writeString("altRegionISO3", altRegionISO3)
+	b.writeConst("regionISO", tag.Index(regionISO.join()))
+	b.writeConst("altRegionISO3", altRegionISO3)
 	b.writeSlice("altRegionIDs", altRegionIDs)
 
 	// Create list of deprecated regions.
@@ -1124,7 +1029,7 @@ func (b *builder) writeRegion() {
 	if len(m49map) >= 1<<regionBits {
 		log.Fatalf("Maximum number of regions exceeded: %d > %d", len(m49map), 1<<regionBits)
 	}
-	m49Index := [9]uint16{}
+	m49Index := [9]int16{}
 	fromM49 := []uint16{}
 	m49 := []int{}
 	for k, _ := range fromM49map {
@@ -1133,8 +1038,8 @@ func (b *builder) writeRegion() {
 	sort.Ints(m49)
 	for _, k := range m49[1:] {
 		val := (k & (1<<searchBits - 1)) << regionBits
-		fromM49 = append(fromM49, uint16(val|fromM49map[uint16(k)]))
-		m49Index[1:][k>>searchBits] = uint16(len(fromM49))
+		fromM49 = append(fromM49, uint16(val|fromM49map[int16(k)]))
+		m49Index[1:][k>>searchBits] = int16(len(fromM49))
 	}
 	b.writeSlice("m49Index", m49Index)
 	b.writeSlice("fromM49", fromM49)
@@ -1196,11 +1101,15 @@ func (b *builder) writeVariant() {
 			continue
 		}
 		c := strings.Split(e.prefix[0], "-")
-		hasScript := false
+		hasScriptOrRegion := false
 		if len(c) > 1 {
-			_, hasScript = b.script.find(c[1])
+			_, hasScriptOrRegion = b.script.find(c[1])
+			if !hasScriptOrRegion {
+				_, hasScriptOrRegion = b.region.find(c[1])
+
+			}
 		}
-		if len(c) == 1 || len(c) == 2 && hasScript {
+		if len(c) == 1 || len(c) == 2 && hasScriptOrRegion {
 			// Variant is preceded by a language.
 			specialized.add(v)
 			continue
@@ -1208,12 +1117,12 @@ func (b *builder) writeVariant() {
 		// Variant is preceded by another variant.
 		specializedExtend.add(v)
 		prefix := c[0] + "-"
-		if hasScript {
+		if hasScriptOrRegion {
 			prefix += c[1]
 		}
 		for _, p := range e.prefix {
 			// Verify that the prefix minus the last element is a prefix of the
-			// predecesor element.
+			// predecessor element.
 			i := strings.LastIndex(p, "-")
 			pred := b.registry[p[i+1:]]
 			if find(pred.prefix, p[:i]) < 0 {
@@ -1225,7 +1134,7 @@ func (b *builder) writeVariant() {
 			count := strings.Count(p[:i], "-")
 			for _, q := range pred.prefix {
 				if c := strings.Count(q, "-"); c != count {
-					log.Fatalf("variant %q precedeeding %q has a prefix %q of size %d; want %d", p[i+1:], v, q, c, count)
+					log.Fatalf("variant %q preceding %q has a prefix %q of size %d; want %d", p[i+1:], v, q, c, count)
 				}
 			}
 			if !strings.HasPrefix(p, prefix) {
@@ -1273,40 +1182,7 @@ func (b *builder) writeVariant() {
 	b.writeConst("variantNumSpecialized", numSpecialized)
 }
 
-func (b *builder) writeLocale() {
-	b.writeStringSlice("locale", b.locale.slice())
-}
-
 func (b *builder) writeLanguageInfo() {
-}
-
-func (b *builder) writeCurrencies() {
-	b.writeConsts(b.currency.index, "XTS", "XXX")
-
-	digits := map[string]uint64{}
-	rounding := map[string]uint64{}
-	for _, info := range b.supp.CurrencyData.Fractions[0].Info {
-		var err error
-		digits[info.Iso4217], err = strconv.ParseUint(info.Digits, 10, curDigitBits)
-		failOnError(err)
-		rounding[info.Iso4217], err = strconv.ParseUint(info.Rounding, 10, curRoundBits)
-		failOnError(err)
-	}
-	for i, cur := range b.currency.slice() {
-		d := uint64(2) // default number of decimal positions
-		if dd, ok := digits[cur]; ok {
-			d = dd
-		}
-		var r uint64
-		if r = rounding[cur]; r == 0 {
-			r = 1 // default rounding increment in units 10^{-digits)
-		}
-		b.currency.s[i] += mkCurrencyInfo(int(r), int(d))
-	}
-	b.writeString("currency", b.currency.join())
-	// Hack alert: gofmt indents a trailing comment after an indented string.
-	// Ensure that the next thing written is not a comment.
-	// writeLikelyData serves this purpose as it starts with an uncommented type.
 }
 
 // writeLikelyData writes tables that are used both for finding parent relations and for
@@ -1569,12 +1445,11 @@ func (b *builder) writeMatchData() {
 				oneway: m.Oneway == "true",
 			})
 		} else {
-			// TODO: Handle the es_MX -> es_419 mapping. This does not seem to
-			// make much sense for our purposes, though.
+			// TODO: Handle other mappings.
 			a := []string{"*;*", "*_*;*_*", "es_MX;es_419"}
 			s := strings.Join([]string{desired, supported}, ";")
 			if i := sort.SearchStrings(a, s); i == len(a) || a[i] != s {
-				log.Fatalf("%q not handled", s)
+				log.Printf("%q not handled", s)
 			}
 		}
 	}
@@ -1722,60 +1597,18 @@ func (b *builder) writeParents() {
 	b.writeSliceAddSize("parents", n*2, parents)
 }
 
-var (
-	header = `// Generated by running
-//		maketables -url=%s -iana=%s -tld=%s
-// automatically with go generate.
-// DO NOT EDIT
-
-package language
-`
-
-	version = `
-// Version is the version of CLDR used to generate the data in this package.
-const Version = %q
-`
-)
-
-func rewriteCommon() {
-	// Generate common.go
-	src, err := ioutil.ReadFile("gen_common.go")
-	failOnError(err)
-	const toDelete = "// +build ignore\n\npackage main\n"
-	i := bytes.Index(src, []byte(toDelete))
-	if i < 0 {
-		log.Fatalf("could not find %q in gen_common.go", toDelete)
-	}
-	w := &bytes.Buffer{}
-	fmt.Fprintf(w, header, *url, *iana, *tld)
-	w.Write(src[i+len(toDelete):])
-	failOnError(ioutil.WriteFile("common.go", w.Bytes(), 0644))
-}
-
 func main() {
-	flag.Parse()
+	gen.Init()
 
-	rewriteCommon()
+	gen.Repackage("gen_common.go", "common.go", "language")
 
-	// Pipe output to gofmt -s.
-	gofmt := exec.Command("gofmt", "-s")
-	f, err := os.Create(*outputFile)
-	failOnError(err)
-	defer f.Close()
-	gofmt.Stdout = f
-	gofmt.Stderr = os.Stderr
+	w := gen.NewCodeWriter()
+	defer w.WriteGoFile("tables.go", "language")
 
-	fd, err := gofmt.StdinPipe()
-	failOnError(err)
-	defer fd.Close()
-	w := bufio.NewWriter(fd)
-	defer w.Flush()
-
-	failOnError(gofmt.Start())
+	fmt.Fprintln(w, `import "golang.org/x/text/internal/tag"`)
 
 	b := newBuilder(w)
-	fmt.Fprintf(w, header, *url, *iana, *tld)
-	fmt.Fprintf(w, version, cldr.Version)
+	gen.WriteCLDRVersion(w)
 
 	b.parseIndices()
 	b.writeType(fromTo{})
@@ -1784,12 +1617,9 @@ func main() {
 	b.writeRegion()
 	b.writeVariant()
 	// TODO: b.writeLocale()
-	b.writeCurrencies()
 	b.computeRegionGroups()
 	b.writeLikelyData()
 	b.writeMatchData()
 	b.writeRegionInclusionData()
 	b.writeParents()
-
-	fmt.Fprintf(w, "\n// Size: %.1fK (%d bytes); Check: %X\n", float32(b.size)/1024, b.size, b.hash32.Sum32())
 }

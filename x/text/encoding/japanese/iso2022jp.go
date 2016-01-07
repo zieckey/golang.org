@@ -9,24 +9,26 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/internal"
+	"golang.org/x/text/encoding/internal/identifier"
 	"golang.org/x/text/transform"
 )
 
 // ISO2022JP is the ISO-2022-JP encoding.
-var ISO2022JP encoding.Encoding = iso2022JP{}
+var ISO2022JP encoding.Encoding = &iso2022JP
 
-type iso2022JP struct{}
+var iso2022JP = internal.Encoding{
+	internal.FuncEncoding{iso2022JPNewDecoder, iso2022JPNewEncoder},
+	"ISO-2022-JP",
+	identifier.ISO2022JP,
+}
 
-func (iso2022JP) NewDecoder() transform.Transformer {
+func iso2022JPNewDecoder() transform.Transformer {
 	return new(iso2022JPDecoder)
 }
 
-func (iso2022JP) NewEncoder() transform.Transformer {
+func iso2022JPNewEncoder() transform.Transformer {
 	return new(iso2022JPEncoder)
-}
-
-func (iso2022JP) String() string {
-	return "ISO-2022-JP"
 }
 
 var errInvalidISO2022JP = errors.New("japanese: invalid ISO-2022-JP encoding")
@@ -152,9 +154,6 @@ func (e *iso2022JPEncoder) Transform(dst, src []byte, atEOF bool) (nDst, nSrc in
 		// Decode a 1-byte rune.
 		if r < utf8.RuneSelf {
 			size = 1
-			if r == asciiEsc {
-				r = encoding.ASCIISub
-			}
 
 		} else {
 			// Decode a multi-byte rune.
@@ -207,7 +206,22 @@ func (e *iso2022JPEncoder) Transform(dst, src []byte, atEOF bool) (nDst, nSrc in
 					goto writeJIS
 				}
 			}
-			r = encoding.ASCIISub
+
+			// Switch back to ASCII state in case of error so that an ASCII
+			// replacement character can be written in the correct state.
+			if *e != asciiState {
+				if nDst+3 > len(dst) {
+					err = transform.ErrShortDst
+					break
+				}
+				*e = asciiState
+				dst[nDst+0] = asciiEsc
+				dst[nDst+1] = '('
+				dst[nDst+2] = 'B'
+				nDst += 3
+			}
+			err = internal.ErrASCIIReplacement
+			break
 		}
 
 		if *e != asciiState {
@@ -266,6 +280,17 @@ func (e *iso2022JPEncoder) Transform(dst, src []byte, atEOF bool) (nDst, nSrc in
 		dst[nDst] = uint8(r - (0xff61 - 0x21))
 		nDst++
 		continue
+	}
+	if atEOF && err == nil && *e != asciiState {
+		if nDst+3 > len(dst) {
+			err = transform.ErrShortDst
+		} else {
+			*e = asciiState
+			dst[nDst+0] = asciiEsc
+			dst[nDst+1] = '('
+			dst[nDst+2] = 'B'
+			nDst += 3
+		}
 	}
 	return nDst, nSrc, err
 }

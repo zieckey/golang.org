@@ -2,63 +2,111 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build darwin linux windows
+
+// An app that demonstrates the sprite package.
+//
+// Note: This demo is an early preview of Go 1.5. In order to build this
+// program as an Android APK using the gomobile tool.
+//
+// See http://godoc.org/golang.org/x/mobile/cmd/gomobile to install gomobile.
+//
+// Get the sprite example and use gomobile to build or install it on your device.
+//
+//   $ go get -d golang.org/x/mobile/example/sprite
+//   $ gomobile build golang.org/x/mobile/example/sprite # will build an APK
+//
+//   # plug your Android device to your computer or start an Android emulator.
+//   # if you have adb installed on your machine, use gomobile install to
+//   # build and deploy the APK to an Android target.
+//   $ gomobile install golang.org/x/mobile/example/sprite
+//
+// Switch to your device or emulator to start the Basic application from
+// the launcher.
+// You can also run the application on your desktop by running the command
+// below. (Note: It currently doesn't work on Windows.)
+//   $ go install golang.org/x/mobile/example/sprite && sprite
 package main
 
 import (
 	"image"
 	"log"
 	"math"
-	"os"
 	"time"
 
 	_ "image/jpeg"
 
 	"golang.org/x/mobile/app"
-	"golang.org/x/mobile/app/debug"
-	"golang.org/x/mobile/event"
-	"golang.org/x/mobile/f32"
+	"golang.org/x/mobile/asset"
+	"golang.org/x/mobile/event/lifecycle"
+	"golang.org/x/mobile/event/paint"
+	"golang.org/x/mobile/event/size"
+	"golang.org/x/mobile/exp/app/debug"
+	"golang.org/x/mobile/exp/f32"
+	"golang.org/x/mobile/exp/gl/glutil"
+	"golang.org/x/mobile/exp/sprite"
+	"golang.org/x/mobile/exp/sprite/clock"
+	"golang.org/x/mobile/exp/sprite/glsprite"
 	"golang.org/x/mobile/gl"
-	"golang.org/x/mobile/sprite"
-	"golang.org/x/mobile/sprite/clock"
-	"golang.org/x/mobile/sprite/glsprite"
 )
 
 var (
-	start     = time.Now()
-	lastClock = clock.Time(-1)
-
-	eng   = glsprite.Engine()
-	scene *sprite.Node
+	startTime = time.Now()
+	images    *glutil.Images
+	eng       sprite.Engine
+	scene     *sprite.Node
+	fps       *debug.FPS
 )
 
 func main() {
-	app.Run(app.Callbacks{
-		Draw:  draw,
-		Touch: touch,
+	app.Main(func(a app.App) {
+		var glctx gl.Context
+		var sz size.Event
+		for e := range a.Events() {
+			switch e := a.Filter(e).(type) {
+			case lifecycle.Event:
+				switch e.Crosses(lifecycle.StageVisible) {
+				case lifecycle.CrossOn:
+					glctx, _ = e.DrawContext.(gl.Context)
+					onStart(glctx)
+					a.Send(paint.Event{})
+				case lifecycle.CrossOff:
+					onStop()
+					glctx = nil
+				}
+			case size.Event:
+				sz = e
+			case paint.Event:
+				if glctx == nil || e.External {
+					continue
+				}
+				onPaint(glctx, sz)
+				a.Publish()
+				a.Send(paint.Event{}) // keep animating
+			}
+		}
 	})
 }
 
-func draw() {
-	if scene == nil {
-		loadScene()
-	}
-
-	now := clock.Time(time.Since(start) * 60 / time.Second)
-	if now == lastClock {
-		// TODO: figure out how to limit draw callbacks to 60Hz instead of
-		// burning the CPU as fast as possible.
-		// TODO: (relatedly??) sync to vblank?
-		return
-	}
-	lastClock = now
-
-	gl.ClearColor(1, 1, 1, 1)
-	gl.Clear(gl.COLOR_BUFFER_BIT)
-	eng.Render(scene, now)
-	debug.DrawFPS()
+func onStart(glctx gl.Context) {
+	images = glutil.NewImages(glctx)
+	fps = debug.NewFPS(images)
+	eng = glsprite.Engine(images)
+	loadScene()
 }
 
-func touch(t event.Touch) {
+func onStop() {
+	eng.Release()
+	fps.Release()
+	images.Release()
+}
+
+func onPaint(glctx gl.Context, sz size.Event) {
+	glctx.ClearColor(1, 1, 1, 1)
+	glctx.Clear(gl.COLOR_BUFFER_BIT)
+	now := clock.Time(time.Since(startTime) * 60 / time.Second)
+	eng.Render(scene, now, sz)
+	fps.Draw(sz)
 }
 
 func newNode() *sprite.Node {
@@ -125,12 +173,13 @@ const (
 )
 
 func loadTextures() []sprite.SubTex {
-	f, err := os.Open("../../testdata/waza-gophers.jpeg")
+	a, err := asset.Open("waza-gophers.jpeg")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer f.Close()
-	img, _, err := image.Decode(f)
+	defer a.Close()
+
+	img, _, err := image.Decode(a)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 // Package satisfy inspects the type-checked ASTs of Go packages and
 // reports the set of discovered type constraints of the form (lhs, rhs
 // Type) where lhs is a non-trivial interface, rhs satisfies this
@@ -48,8 +50,10 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"go/types"
 
-	"golang.org/x/tools/go/types"
+	"golang.org/x/tools/go/ast/astutil"
+	"golang.org/x/tools/go/types/typeutil"
 )
 
 // A Constraint records the fact that the RHS type does and must
@@ -70,7 +74,7 @@ type Constraint struct {
 //
 type Finder struct {
 	Result    map[Constraint]bool
-	msetcache types.MethodSetCache
+	msetcache typeutil.MethodSetCache
 
 	// per-Find state
 	info *types.Info
@@ -698,19 +702,6 @@ func deref(typ types.Type) types.Type {
 	return typ
 }
 
-// unparen returns e with any enclosing parentheses stripped.
-func unparen(e ast.Expr) ast.Expr {
-	for {
-		p, ok := e.(*ast.ParenExpr)
-		if !ok {
-			break
-		}
-		e = p.X
-	}
-	return e
-}
+func unparen(e ast.Expr) ast.Expr { return astutil.Unparen(e) }
 
-func isInterface(T types.Type) bool {
-	_, ok := T.Underlying().(*types.Interface)
-	return ok
-}
+func isInterface(T types.Type) bool { return types.IsInterface(T) }

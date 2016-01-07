@@ -6,9 +6,15 @@
 // Protocol version 4.
 //
 // The package provides IP-level socket options that allow
-// manipulation of IPv4 facilities.  The IPv4 and basic host
-// requirements for IPv4 are defined in RFC 791, RFC 1112, RFC 1122,
-// RFC 3678 and RFC 4607.
+// manipulation of IPv4 facilities.
+//
+// The IPv4 protocol and basic host requirements for IPv4 are defined
+// in RFC 791 and RFC 1122.
+// Host extensions for multicasting and socket interface extensions
+// for multicast source filters are defined in RFC 1112 and RFC 3678.
+// IGMPv1, IGMPv2 and IGMPv3 are defined in RFC 1112, RFC 2236 and RFC
+// 3376.
+// Source-specific multicast is defined in RFC 4607.
 //
 //
 // Unicasting
@@ -36,7 +42,7 @@
 // The outgoing packets will be labeled DiffServ assured forwarding
 // class 1 low drop precedence, known as AF11 packets.
 //
-//			if err := ipv4.NewConn(c).SetTOS(DiffServAF11); err != nil {
+//			if err := ipv4.NewConn(c).SetTOS(0x28); err != nil {
 //				// error handling
 //			}
 //			if _, err := c.Write(data); err != nil {
@@ -108,7 +114,7 @@
 //			// error handling
 //		}
 //		if cm.Dst.IsMulticast() {
-//			if cm.Dst.Equal(group)
+//			if cm.Dst.Equal(group) {
 //				// joined group, do something
 //			} else {
 //				// unknown group, discard
@@ -118,7 +124,7 @@
 //
 // The application can also send both unicast and multicast packets.
 //
-//		p.SetTOS(DiffServCS0)
+//		p.SetTOS(0x0)
 //		p.SetTTL(16)
 //		if _, err := p.WriteTo(data, nil, src); err != nil {
 //			// error handling
@@ -198,10 +204,9 @@
 // Source-specific multicasting
 //
 // An application that uses PacketConn or RawConn on IGMPv3 supported
-// platform is able to join source-specific multicast groups as
-// described in RFC 3678.  The application may use
-// JoinSourceSpecificGroup and LeaveSourceSpecificGroup for the
-// operation known as "include" mode,
+// platform is able to join source-specific multicast groups.
+// The application may use JoinSourceSpecificGroup and
+// LeaveSourceSpecificGroup for the operation known as "include" mode,
 //
 //	ssmgroup := net.UDPAddr{IP: net.IPv4(232, 7, 8, 9)}
 //	ssmsource := net.UDPAddr{IP: net.IPv4(192, 168, 0, 1)})
@@ -231,7 +236,7 @@
 // when an application which runs on IGMPv3 unsupported platform uses
 // JoinSourceSpecificGroup and LeaveSourceSpecificGroup.
 // In general the platform tries to fall back to conversations using
-// IGMPv1 or IGMP2 and starts to listen to multicast traffic.
+// IGMPv1 or IGMPv2 and starts to listen to multicast traffic.
 // In the fallback case, ExcludeSourceSpecificGroup and
 // IncludeSourceSpecificGroup may return an error.
 package ipv4 // import "golang.org/x/net/ipv4"

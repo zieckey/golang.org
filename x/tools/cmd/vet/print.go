@@ -10,13 +10,12 @@ import (
 	"bytes"
 	"flag"
 	"go/ast"
+	exact "go/constant"
 	"go/token"
+	"go/types"
 	"strconv"
 	"strings"
 	"unicode/utf8"
-
-	"golang.org/x/tools/go/exact"
-	"golang.org/x/tools/go/types"
 )
 
 var printfuncs = flag.String("printfuncs", "", "comma-separated list of print function names to check")
@@ -26,6 +25,32 @@ func init() {
 		"check printf-like invocations",
 		checkFmtPrintfCall,
 		funcDecl, callExpr)
+}
+
+func initPrintFlags() {
+	if *printfuncs == "" {
+		return
+	}
+	for _, name := range strings.Split(*printfuncs, ",") {
+		if len(name) == 0 {
+			flag.Usage()
+		}
+		skip := 0
+		if colon := strings.LastIndex(name, ":"); colon > 0 {
+			var err error
+			skip, err = strconv.Atoi(name[colon+1:])
+			if err != nil {
+				errorf(`illegal format for "Func:N" argument %q; %s`, name, err)
+			}
+			name = name[:colon]
+		}
+		name = strings.ToLower(name)
+		if name[len(name)-1] == 'f' {
+			printfList[name] = skip
+		} else {
+			printList[name] = skip
+		}
+	}
 }
 
 // printfList records the formatted-print functions. The value is the location
@@ -473,6 +498,10 @@ func (f *File) argCanBeChecked(call *ast.CallExpr, formatArg int, isStar bool, s
 	if argNum < 0 {
 		// Shouldn't happen, so catch it with prejudice.
 		panic("negative arg num")
+	}
+	if argNum == 0 {
+		f.Badf(call.Pos(), `index value [0] for %s("%s"); indexes start at 1`, state.name, state.format)
+		return false
 	}
 	if argNum < len(call.Args)-1 {
 		return true // Always OK.

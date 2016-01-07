@@ -7,6 +7,7 @@
 package main
 
 import (
+	"errors"
 	"go/ast"
 	"reflect"
 	"strconv"
@@ -32,13 +33,8 @@ func checkCanonicalFieldTag(f *File, node ast.Node) {
 		return
 	}
 
-	// Check tag for validity by appending
-	// new key:value to end and checking that
-	// the tag parsing code can find it.
-	st := reflect.StructTag(tag + ` _gofix:"_magic"`)
-	if st.Get("_gofix") != "_magic" {
-		f.Badf(field.Pos(), "struct field tag %s not compatible with reflect.StructTag.Get", field.Tag.Value)
-		return
+	if err := validateStructTag(tag); err != nil {
+		f.Badf(field.Pos(), "struct field tag %s not compatible with reflect.StructTag.Get: %s", field.Tag.Value, err)
 	}
 
 	// Check for use of json or xml tags with unexported fields.
@@ -53,10 +49,74 @@ func checkCanonicalFieldTag(f *File, node ast.Node) {
 		return
 	}
 
+	st := reflect.StructTag(tag)
 	for _, enc := range [...]string{"json", "xml"} {
 		if st.Get(enc) != "" {
 			f.Badf(field.Pos(), "struct field %s has %s tag but is not exported", field.Names[0].Name, enc)
 			return
 		}
 	}
+}
+
+var (
+	errTagSyntax      = errors.New("bad syntax for struct tag pair")
+	errTagKeySyntax   = errors.New("bad syntax for struct tag key")
+	errTagValueSyntax = errors.New("bad syntax for struct tag value")
+)
+
+// validateStructTag parses the struct tag and returns an error if it is not
+// in the canonical format, which is a space-separated list of key:"value"
+// settings. The value may contain spaces.
+func validateStructTag(tag string) error {
+	// This code is based on the StructTag.Get code in package reflect.
+
+	for tag != "" {
+		// Skip leading space.
+		i := 0
+		for i < len(tag) && tag[i] == ' ' {
+			i++
+		}
+		tag = tag[i:]
+		if tag == "" {
+			break
+		}
+
+		// Scan to colon. A space, a quote or a control character is a syntax error.
+		// Strictly speaking, control chars include the range [0x7f, 0x9f], not just
+		// [0x00, 0x1f], but in practice, we ignore the multi-byte control characters
+		// as it is simpler to inspect the tag's bytes than the tag's runes.
+		i = 0
+		for i < len(tag) && tag[i] > ' ' && tag[i] != ':' && tag[i] != '"' && tag[i] != 0x7f {
+			i++
+		}
+		if i == 0 {
+			return errTagKeySyntax
+		}
+		if i+1 >= len(tag) || tag[i] != ':' {
+			return errTagSyntax
+		}
+		if tag[i+1] != '"' {
+			return errTagValueSyntax
+		}
+		tag = tag[i+1:]
+
+		// Scan quoted string to find value.
+		i = 1
+		for i < len(tag) && tag[i] != '"' {
+			if tag[i] == '\\' {
+				i++
+			}
+			i++
+		}
+		if i >= len(tag) {
+			return errTagValueSyntax
+		}
+		qvalue := string(tag[:i+1])
+		tag = tag[i+1:]
+
+		if _, err := strconv.Unquote(qvalue); err != nil {
+			return errTagValueSyntax
+		}
+	}
+	return nil
 }

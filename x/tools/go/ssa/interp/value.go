@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package interp
 
 // Values
@@ -36,6 +38,7 @@ package interp
 import (
 	"bytes"
 	"fmt"
+	"go/types"
 	"io"
 	"reflect"
 	"strings"
@@ -43,7 +46,6 @@ import (
 	"unsafe"
 
 	"golang.org/x/tools/go/ssa"
-	"golang.org/x/tools/go/types"
 	"golang.org/x/tools/go/types/typeutil"
 )
 
@@ -310,43 +312,53 @@ func hash(t types.Type, x value) int {
 	panic(fmt.Sprintf("%T is unhashable", x))
 }
 
-// copyVal returns a copy of value v.
-// TODO(adonovan): add tests of aliasing and mutation.
-func copyVal(v value) value {
-	if v == nil {
-		panic("copyVal(nil)")
-	}
-	switch v := v.(type) {
-	case bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, uintptr, float32, float64, complex64, complex128, string, unsafe.Pointer:
-		return v
-	case map[value]value:
-		return v
-	case *hashmap:
-		return v
-	case chan value:
-		return v
-	case *value:
-		return v
-	case *ssa.Function, *ssa.Builtin, *closure:
-		return v
-	case iface:
-		return v
-	case []value:
-		return v
-	case structure:
+// reflect.Value struct values don't have a fixed shape, since the
+// payload can be a scalar or an aggregate depending on the instance.
+// So store (and load) can't simply use recursion over the shape of the
+// rhs value, or the lhs, to copy the value; we need the static type
+// information.  (We can't make reflect.Value a new basic data type
+// because its "structness" is exposed to Go programs.)
+
+// load returns the value of type T in *addr.
+func load(T types.Type, addr *value) value {
+	switch T := T.Underlying().(type) {
+	case *types.Struct:
+		v := (*addr).(structure)
 		a := make(structure, len(v))
-		copy(a, v)
+		for i := range a {
+			a[i] = load(T.Field(i).Type(), &v[i])
+		}
 		return a
-	case array:
+	case *types.Array:
+		v := (*addr).(array)
 		a := make(array, len(v))
-		copy(a, v)
+		for i := range a {
+			a[i] = load(T.Elem(), &v[i])
+		}
 		return a
-	case tuple:
-		break
-	case rtype:
-		return v
+	default:
+		return *addr
 	}
-	panic(fmt.Sprintf("cannot copy %T", v))
+}
+
+// store stores value v of type T into *addr.
+func store(T types.Type, addr *value, v value) {
+	switch T := T.Underlying().(type) {
+	case *types.Struct:
+		lhs := (*addr).(structure)
+		rhs := v.(structure)
+		for i := range lhs {
+			store(T.Field(i).Type(), &lhs[i], rhs[i])
+		}
+	case *types.Array:
+		lhs := (*addr).(array)
+		rhs := v.(array)
+		for i := range lhs {
+			store(T.Elem(), &lhs[i], rhs[i])
+		}
+	default:
+		*addr = v
+	}
 }
 
 // Prints in the style of built-in println.

@@ -47,7 +47,6 @@ func (check *Checker) builtin(x *operand, call *ast.CallExpr, id builtinId) (_ b
 		// make argument getter
 		arg, nargs, _ = unpack(func(x *operand, i int) { check.expr(x, call.Args[i]) }, nargs, false)
 		if arg == nil {
-			x.mode = invalid
 			return
 		}
 		// evaluate first argument, if present
@@ -97,7 +96,7 @@ func (check *Checker) builtin(x *operand, call *ast.CallExpr, id builtinId) (_ b
 		// spec: "As a special case, append also accepts a first argument assignable
 		// to type []byte with a second argument of string type followed by ... .
 		// This form appends the bytes of the string.
-		if nargs == 2 && call.Ellipsis.IsValid() && x.assignableTo(check.conf, NewSlice(UniverseByte)) {
+		if nargs == 2 && call.Ellipsis.IsValid() && x.assignableTo(check.conf, NewSlice(universeByte)) {
 			arg(x, 1)
 			if x.mode == invalid {
 				return
@@ -290,7 +289,7 @@ func (check *Checker) builtin(x *operand, call *ast.CallExpr, id builtinId) (_ b
 		switch t := y.typ.Underlying().(type) {
 		case *Basic:
 			if isString(y.typ) {
-				src = UniverseByte
+				src = universeByte
 			}
 		case *Slice:
 			src = t.elem
@@ -608,14 +607,15 @@ func implicitArrayDeref(typ Type) Type {
 	return typ
 }
 
-// unparen removes any parentheses surrounding an expression and returns
-// the naked expression.
-//
-func unparen(x ast.Expr) ast.Expr {
-	if p, ok := x.(*ast.ParenExpr); ok {
-		return unparen(p.X)
+// unparen returns e with any enclosing parentheses stripped.
+func unparen(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
 	}
-	return x
 }
 
 func (check *Checker) complexArg(x *operand) bool {

@@ -30,11 +30,11 @@ var packetConnReadWriteMulticastUDPTests = []struct {
 func TestPacketConnReadWriteMulticastUDP(t *testing.T) {
 	switch runtime.GOOS {
 	case "nacl", "plan9", "solaris", "windows":
-		t.Skipf("not supported on %q", runtime.GOOS)
+		t.Skipf("not supported on %s", runtime.GOOS)
 	}
 	ifi := nettest.RoutedInterface("ip4", net.FlagUp|net.FlagMulticast|net.FlagLoopback)
 	if ifi == nil {
-		t.Skipf("not available on %q", runtime.GOOS)
+		t.Skipf("not available on %s", runtime.GOOS)
 	}
 
 	for _, tt := range packetConnReadWriteMulticastUDPTests {
@@ -58,7 +58,7 @@ func TestPacketConnReadWriteMulticastUDP(t *testing.T) {
 				switch runtime.GOOS {
 				case "freebsd", "linux":
 				default: // platforms that don't support IGMPv2/3 fail here
-					t.Logf("not supported on %q", runtime.GOOS)
+					t.Logf("not supported on %s", runtime.GOOS)
 					continue
 				}
 				t.Fatal(err)
@@ -83,7 +83,7 @@ func TestPacketConnReadWriteMulticastUDP(t *testing.T) {
 		for i, toggle := range []bool{true, false, true} {
 			if err := p.SetControlMessage(cf, toggle); err != nil {
 				if nettest.ProtocolNotSupported(err) {
-					t.Logf("not supported on %q", runtime.GOOS)
+					t.Logf("not supported on %s", runtime.GOOS)
 					continue
 				}
 				t.Fatal(err)
@@ -98,12 +98,10 @@ func TestPacketConnReadWriteMulticastUDP(t *testing.T) {
 				t.Fatalf("got %v; want %v", n, len(wb))
 			}
 			rb := make([]byte, 128)
-			if n, cm, _, err := p.ReadFrom(rb); err != nil {
+			if n, _, _, err := p.ReadFrom(rb); err != nil {
 				t.Fatal(err)
 			} else if !bytes.Equal(rb[:n], wb) {
 				t.Fatalf("got %v; want %v", rb[:n], wb)
-			} else {
-				t.Logf("rcvd cmsg: %v", cm)
 			}
 		}
 	}
@@ -120,14 +118,14 @@ var packetConnReadWriteMulticastICMPTests = []struct {
 func TestPacketConnReadWriteMulticastICMP(t *testing.T) {
 	switch runtime.GOOS {
 	case "nacl", "plan9", "solaris", "windows":
-		t.Skipf("not supported on %q", runtime.GOOS)
+		t.Skipf("not supported on %s", runtime.GOOS)
 	}
-	if os.Getuid() != 0 {
-		t.Skip("must be root")
+	if m, ok := nettest.SupportsRawIPSocket(); !ok {
+		t.Skip(m)
 	}
 	ifi := nettest.RoutedInterface("ip4", net.FlagUp|net.FlagMulticast|net.FlagLoopback)
 	if ifi == nil {
-		t.Skipf("not available on %q", runtime.GOOS)
+		t.Skipf("not available on %s", runtime.GOOS)
 	}
 
 	for _, tt := range packetConnReadWriteMulticastICMPTests {
@@ -149,7 +147,7 @@ func TestPacketConnReadWriteMulticastICMP(t *testing.T) {
 				switch runtime.GOOS {
 				case "freebsd", "linux":
 				default: // platforms that don't support IGMPv2/3 fail here
-					t.Logf("not supported on %q", runtime.GOOS)
+					t.Logf("not supported on %s", runtime.GOOS)
 					continue
 				}
 				t.Fatal(err)
@@ -183,7 +181,7 @@ func TestPacketConnReadWriteMulticastICMP(t *testing.T) {
 			}
 			if err := p.SetControlMessage(cf, toggle); err != nil {
 				if nettest.ProtocolNotSupported(err) {
-					t.Logf("not supported on %q", runtime.GOOS)
+					t.Logf("not supported on %s", runtime.GOOS)
 					continue
 				}
 				t.Fatal(err)
@@ -198,10 +196,9 @@ func TestPacketConnReadWriteMulticastICMP(t *testing.T) {
 				t.Fatalf("got %v; want %v", n, len(wb))
 			}
 			rb := make([]byte, 128)
-			if n, cm, _, err := p.ReadFrom(rb); err != nil {
+			if n, _, _, err := p.ReadFrom(rb); err != nil {
 				t.Fatal(err)
 			} else {
-				t.Logf("rcvd cmsg: %v", cm)
 				m, err := icmp.ParseMessage(iana.ProtocolICMP, rb[:n])
 				if err != nil {
 					t.Fatal(err)
@@ -229,12 +226,12 @@ func TestRawConnReadWriteMulticastICMP(t *testing.T) {
 	if testing.Short() {
 		t.Skip("to avoid external network")
 	}
-	if os.Getuid() != 0 {
-		t.Skip("must be root")
+	if m, ok := nettest.SupportsRawIPSocket(); !ok {
+		t.Skip(m)
 	}
 	ifi := nettest.RoutedInterface("ip4", net.FlagUp|net.FlagMulticast|net.FlagLoopback)
 	if ifi == nil {
-		t.Skipf("not available on %q", runtime.GOOS)
+		t.Skipf("not available on %s", runtime.GOOS)
 	}
 
 	for _, tt := range rawConnReadWriteMulticastICMPTests {
@@ -259,7 +256,7 @@ func TestRawConnReadWriteMulticastICMP(t *testing.T) {
 				switch runtime.GOOS {
 				case "freebsd", "linux":
 				default: // platforms that don't support IGMPv2/3 fail here
-					t.Logf("not supported on %q", runtime.GOOS)
+					t.Logf("not supported on %s", runtime.GOOS)
 					continue
 				}
 				t.Fatal(err)
@@ -301,7 +298,7 @@ func TestRawConnReadWriteMulticastICMP(t *testing.T) {
 			}
 			if err := r.SetControlMessage(cf, toggle); err != nil {
 				if nettest.ProtocolNotSupported(err) {
-					t.Logf("not supported on %q", runtime.GOOS)
+					t.Logf("not supported on %s", runtime.GOOS)
 					continue
 				}
 				t.Fatal(err)
@@ -314,10 +311,9 @@ func TestRawConnReadWriteMulticastICMP(t *testing.T) {
 				t.Fatal(err)
 			}
 			rb := make([]byte, ipv4.HeaderLen+128)
-			if rh, b, cm, err := r.ReadFrom(rb); err != nil {
+			if rh, b, _, err := r.ReadFrom(rb); err != nil {
 				t.Fatal(err)
 			} else {
-				t.Logf("rcvd cmsg: %v", cm)
 				m, err := icmp.ParseMessage(iana.ProtocolICMP, b)
 				if err != nil {
 					t.Fatal(err)

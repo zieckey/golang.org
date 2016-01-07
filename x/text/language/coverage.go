@@ -34,14 +34,14 @@ var (
 )
 
 // TODO:
-// - Support Currencies, Variants, numbering systems.
+// - Support Variants, numbering systems.
 // - CLDR coverage levels.
 // - Set of common tags defined in this package.
 
 type allSubtags struct{}
 
 // Regions returns the list of supported regions. As all regions are in a
-// consecutive range, it simply returns an array of numbers in increasing order.
+// consecutive range, it simply returns a slice of numbers in increasing order.
 // The "undefined" region is not returned.
 func (s allSubtags) Regions() []Region {
 	reg := make([]Region, numRegions)
@@ -52,7 +52,7 @@ func (s allSubtags) Regions() []Region {
 }
 
 // Scripts returns the list of supported scripts. As all scripts are in a
-// consecutive range, it simply returns an array of numbers in increasing order.
+// consecutive range, it simply returns a slice of numbers in increasing order.
 // The "undefined" script is not returned.
 func (s allSubtags) Scripts() []Script {
 	scr := make([]Script, numScripts)

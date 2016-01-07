@@ -50,11 +50,18 @@ package unix
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <linux/icmpv6.h>
-#include <termios.h>
+#include <asm/termbits.h>
 #include <time.h>
 #include <unistd.h>
 #include <ustat.h>
 #include <utime.h>
+
+#ifdef TCSETS2
+// On systems that have "struct termios2" use this as type Termios.
+typedef struct termios2 termios_t;
+#else
+typedef struct termios termios_t;
+#endif
 
 enum {
 	sizeofPtr = sizeof(void*),
@@ -77,7 +84,7 @@ struct sockaddr_any {
 // copied from /usr/include/linux/un.h
 struct my_sockaddr_un {
 	sa_family_t sun_family;
-#ifdef __ARM_EABI__
+#if defined(__ARM_EABI__) || defined(__powerpc64__)
 	// on ARM char is by default unsigned
 	signed char sun_path[108];
 #else
@@ -87,6 +94,10 @@ struct my_sockaddr_un {
 
 #ifdef __ARM_EABI__
 typedef struct user_regs PtraceRegs;
+#elif defined(__aarch64__)
+typedef struct user_pt_regs PtraceRegs;
+#elif defined(__powerpc64__)
+typedef struct pt_regs PtraceRegs;
 #else
 typedef struct user_regs_struct PtraceRegs;
 #endif
@@ -159,6 +170,17 @@ type Dirent C.struct_dirent
 type Fsid C.fsid_t
 
 type Flock_t C.struct_flock
+
+// Advice to Fadvise
+
+const (
+	FADV_NORMAL     = C.POSIX_FADV_NORMAL
+	FADV_RANDOM     = C.POSIX_FADV_RANDOM
+	FADV_SEQUENTIAL = C.POSIX_FADV_SEQUENTIAL
+	FADV_WILLNEED   = C.POSIX_FADV_WILLNEED
+	FADV_DONTNEED   = C.POSIX_FADV_DONTNEED
+	FADV_NOREUSE    = C.POSIX_FADV_NOREUSE
+)
 
 // Sockets
 
@@ -374,9 +396,11 @@ type Ustat_t C.struct_ustat
 type EpollEvent C.struct_my_epoll_event
 
 const (
-	_AT_FDCWD = C.AT_FDCWD
+	AT_FDCWD            = C.AT_FDCWD
+	AT_REMOVEDIR        = C.AT_REMOVEDIR
+	AT_SYMLINK_NOFOLLOW = C.AT_SYMLINK_NOFOLLOW
 )
 
 // Terminal handling
 
-type Termios C.struct_termios
+type Termios C.termios_t

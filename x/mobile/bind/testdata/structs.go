@@ -12,3 +12,15 @@ type S struct {
 func (s *S) Sum() float64 {
 	return s.X + s.Y
 }
+
+func (s *S) Identity() (*S, error) {
+	return s, nil
+}
+
+func Identity(s *S) *S {
+	return s
+}
+
+func IdentityWithError(s *S) (*S, error) {
+	return s, nil
+}

@@ -134,6 +134,10 @@ if (objCtr.defineProperty) {
 
 /* Slide movement */
 
+function hideHelpText() {
+  $('#help').hide();
+};
+
 function getSlideEl(no) {
   if ((no < 0) || (no >= slideEls.length)) {
     return null;
@@ -201,6 +205,7 @@ function updateSlides() {
 };
 
 function prevSlide() {
+  hideHelpText();
   if (curSlide > 0) {
     curSlide--;
 
@@ -209,6 +214,7 @@ function prevSlide() {
 };
 
 function nextSlide() {
+  hideHelpText();
   if (curSlide < slideEls.length - 1) {
     curSlide++;
 
@@ -392,6 +398,11 @@ function handleBodyKeyDown(event) {
   var inCode = event.target.classList.contains("code");
 
   switch (event.keyCode) {
+    case 72: // 'H' hides the help text
+    case 27: // escape key
+      if (!inCode) hideHelpText();
+      break;
+
     case 39: // right arrow
     case 13: // Enter
     case 32: // space
@@ -457,13 +468,7 @@ function addGeneralStyle() {
   document.querySelector('head').appendChild(el);
 };
 
-function addPrintStyle() {
-  var el = document.createElement('link');
-  el.rel = 'stylesheet';
-  el.type = 'text/css';
-  el.media = "print";
-  el.href = PERMANENT_URL_PREFIX + 'print.css';
-  document.body.appendChild(el);
+function showHelpText() {
 };
 
 function handleDomLoaded() {
@@ -473,12 +478,15 @@ function handleDomLoaded() {
 
   addFontStyle();
   addGeneralStyle();
-  addPrintStyle();
   addEventListeners();
 
   updateSlides();
 
   setupInteraction();
+
+  if (window.location.hostname == "localhost" || window.location.hostname == "127.0.0.1" || window.location.hostname == "::1") {
+    hideHelpText();
+  }
 
   document.body.classList.add('loaded');
 };

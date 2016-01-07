@@ -10,7 +10,8 @@
 #include <X11/Xlib.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+
+static Atom wm_delete_window;
 
 static Window
 new_window(Display *x_dpy, EGLDisplay e_dpy, int w, int h, EGLContext *ctx, EGLSurface *surf) {
@@ -47,11 +48,18 @@ new_window(Display *x_dpy, EGLDisplay e_dpy, int w, int h, EGLContext *ctx, EGLS
 
 	Window root = RootWindow(x_dpy, DefaultScreen(x_dpy));
 	XSetWindowAttributes attr;
+
+	attr.colormap = XCreateColormap(x_dpy, root, visInfo->visual, AllocNone);
+	if (!attr.colormap) {
+		fprintf(stderr, "XCreateColormap failed\n");
+		exit(1);
+	}
+
 	attr.event_mask = StructureNotifyMask | ExposureMask |
 		ButtonPressMask | ButtonReleaseMask | ButtonMotionMask;
 	Window win = XCreateWindow(
 		x_dpy, root, 0, 0, w, h, 0, visInfo->depth, InputOutput,
-		visInfo->visual, CWEventMask, &attr);
+		visInfo->visual, CWColormap | CWEventMask, &attr);
 	XFree(visInfo);
 
 	XSizeHints sizehints;
@@ -78,14 +86,20 @@ new_window(Display *x_dpy, EGLDisplay e_dpy, int w, int h, EGLContext *ctx, EGLS
 	return win;
 }
 
+Display *x_dpy;
+EGLDisplay e_dpy;
+EGLContext e_ctx;
+EGLSurface e_surf;
+Window win;
+
 void
-runApp(void) {
-	Display *x_dpy = XOpenDisplay(NULL);
+createWindow(void) {
+	x_dpy = XOpenDisplay(NULL);
 	if (!x_dpy) {
 		fprintf(stderr, "XOpenDisplay failed\n");
 		exit(1);
 	}
-	EGLDisplay e_dpy = eglGetDisplay(x_dpy);
+	e_dpy = eglGetDisplay(x_dpy);
 	if (!e_dpy) {
 		fprintf(stderr, "eglGetDisplay failed\n");
 		exit(1);
@@ -96,21 +110,40 @@ runApp(void) {
 		exit(1);
 	}
 	eglBindAPI(EGL_OPENGL_ES_API);
-	EGLContext e_ctx;
-	EGLSurface e_surf;
-	Window win = new_window(x_dpy, e_dpy, 400, 400, &e_ctx, &e_surf);
+	win = new_window(x_dpy, e_dpy, 400, 400, &e_ctx, &e_surf);
+
+	wm_delete_window = XInternAtom(x_dpy, "WM_DELETE_WINDOW", True);
+	if (wm_delete_window != None) {
+		XSetWMProtocols(x_dpy, win, &wm_delete_window, 1);
+	}
+
 	XMapWindow(x_dpy, win);
 	if (!eglMakeCurrent(e_dpy, e_surf, e_surf, e_ctx)) {
 		fprintf(stderr, "eglMakeCurrent failed\n");
 		exit(1);
 	}
 
+	// Window size and DPI should be initialized before starting app.
+	XEvent ev;
 	while (1) {
+		if (XCheckMaskEvent(x_dpy, StructureNotifyMask, &ev) == False) {
+			continue;
+		}
+		if (ev.type == ConfigureNotify) {
+			onResize(ev.xconfigure.width, ev.xconfigure.height);
+			break;
+		}
+	}
+}
+
+void
+processEvents(void) {
+	while (XPending(x_dpy)) {
 		XEvent ev;
 		XNextEvent(x_dpy, &ev);
 		switch (ev.type) {
 		case ButtonPress:
-			onTouchStart((float)ev.xbutton.x, (float)ev.xbutton.y);
+			onTouchBegin((float)ev.xbutton.x, (float)ev.xbutton.y);
 			break;
 		case ButtonRelease:
 			onTouchEnd((float)ev.xbutton.x, (float)ev.xbutton.y);
@@ -118,25 +151,23 @@ runApp(void) {
 		case MotionNotify:
 			onTouchMove((float)ev.xmotion.x, (float)ev.xmotion.y);
 			break;
-		case Expose:
-			onDraw();
-			eglSwapBuffers(e_dpy, e_surf);
-
-			// TODO(nigeltao): subscribe to vblank events instead of forcing another
-			// expose event to keep the event loop ticking over.
-			// TODO(nigeltao): no longer #include <string.h> when we don't use memset.
-			XExposeEvent fakeEvent;
-			memset(&fakeEvent, 0, sizeof(XExposeEvent));
-			fakeEvent.type = Expose;
-			fakeEvent.window = win;
-			XSendEvent(x_dpy, win, 0, 0, (XEvent*)&fakeEvent);
-			XFlush(x_dpy);
-
-			break;
 		case ConfigureNotify:
 			onResize(ev.xconfigure.width, ev.xconfigure.height);
-			glViewport(0, 0, (GLint)ev.xconfigure.width, (GLint)ev.xconfigure.height);
+			break;
+		case ClientMessage:
+			if (wm_delete_window != None && (Atom)ev.xclient.data.l[0] == wm_delete_window) {
+				onStop();
+				return;
+			}
 			break;
 		}
+	}
+}
+
+void
+swapBuffers(void) {
+	if (eglSwapBuffers(e_dpy, e_surf) == EGL_FALSE) {
+		fprintf(stderr, "eglSwapBuffer failed\n");
+		exit(1);
 	}
 }

@@ -8,11 +8,12 @@ import (
 	"bytes"
 	_ "crypto/sha512"
 	"encoding/hex"
-	"golang.org/x/crypto/openpgp/errors"
 	"io"
 	"io/ioutil"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/openpgp/errors"
 )
 
 func readerFromHex(s string) io.Reader {
@@ -135,6 +136,25 @@ func TestTextSignedMessage(t *testing.T) {
 	checkSignedMessage(t, signedTextMessageHex, signedTextInput)
 }
 
+// The reader should detect "compressed quines", which are compressed
+// packets that expand into themselves and cause an infinite recursive
+// parsing loop.
+// The packet in this test case comes from Taylor R. Campbell at
+// http://mumble.net/~campbell/misc/pgp-quine/
+func TestCampbellQuine(t *testing.T) {
+	md, err := ReadMessage(readerFromHex(campbellQuine), nil, nil, nil)
+	if md != nil {
+		t.Errorf("Reading a compressed quine should not return any data: %#v", md)
+	}
+	structural, ok := err.(errors.StructuralError)
+	if !ok {
+		t.Fatalf("Unexpected class of error: %T", err)
+	}
+	if !strings.Contains(string(structural), "too many layers of packets") {
+		t.Fatalf("Unexpected error: %s", err)
+	}
+}
+
 var signedEncryptedMessageTests = []struct {
 	keyRingHex       string
 	messageHex       string
@@ -223,7 +243,7 @@ func TestUnspecifiedRecipient(t *testing.T) {
 }
 
 func TestSymmetricallyEncrypted(t *testing.T) {
-	expected := "Symmetrically encrypted.\n"
+	firstTimeCalled := true
 
 	prompt := func(keys []Key, symmetric bool) ([]byte, error) {
 		if len(keys) != 0 {
@@ -232,6 +252,11 @@ func TestSymmetricallyEncrypted(t *testing.T) {
 
 		if !symmetric {
 			t.Errorf("symmetric is not set")
+		}
+
+		if firstTimeCalled {
+			firstTimeCalled = false
+			return []byte("wrongpassword"), nil
 		}
 
 		return []byte("password"), nil
@@ -253,6 +278,7 @@ func TestSymmetricallyEncrypted(t *testing.T) {
 		t.Errorf("LiteralData.Time is %d, want %d", md.LiteralData.Time, expectedCreationTime)
 	}
 
+	const expected = "Symmetrically encrypted.\n"
 	if string(contents) != expected {
 		t.Errorf("contents got: %s want: %s", string(contents), expected)
 	}
@@ -295,6 +321,11 @@ func TestDetachedSignatureDSA(t *testing.T) {
 	testDetachedSignature(t, kring, readerFromHex(detachedSignatureDSAHex), signedInput, "binary", testKey3KeyId)
 }
 
+func TestMultipleSignaturePacketsDSA(t *testing.T) {
+	kring, _ := ReadKeyRing(readerFromHex(dsaTestKeyHex))
+	testDetachedSignature(t, kring, readerFromHex(missingHashFunctionHex+detachedSignatureDSAHex), signedInput, "binary", testKey3KeyId)
+}
+
 func testHashFunctionError(t *testing.T, signatureHex string) {
 	kring, _ := ReadKeyRing(readerFromHex(testKeys1And2Hex))
 	_, err := CheckDetachedSignature(kring, nil, readerFromHex(signatureHex))
@@ -318,8 +349,16 @@ func TestUnknownHashFunction(t *testing.T) {
 
 func TestMissingHashFunction(t *testing.T) {
 	// missingHashFunctionHex contains a signature packet that uses
-	// RIPEMD160, which isn't compiled in.
-	testHashFunctionError(t, missingHashFunctionHex)
+	// RIPEMD160, which isn't compiled in.  Since that's the only signature
+	// packet we don't find any suitable packets and end up with ErrUnknownIssuer
+	kring, _ := ReadKeyRing(readerFromHex(testKeys1And2Hex))
+	_, err := CheckDetachedSignature(kring, nil, readerFromHex(missingHashFunctionHex))
+	if err == nil {
+		t.Fatal("Packet with missing hash type was correctly parsed")
+	}
+	if err != errors.ErrUnknownIssuer {
+		t.Fatalf("Unexpected class of error: %s", err)
+	}
 }
 
 func TestReadingArmoredPrivateKey(t *testing.T) {
@@ -332,11 +371,50 @@ func TestReadingArmoredPrivateKey(t *testing.T) {
 	}
 }
 
+func TestReadingArmoredPublicKey(t *testing.T) {
+	el, err := ReadArmoredKeyRing(bytes.NewBufferString(e2ePublicKey))
+	if err != nil {
+		t.Error(err)
+	}
+	if len(el) != 1 {
+		t.Errorf("didn't get a valid entity")
+	}
+}
+
 func TestNoArmoredData(t *testing.T) {
 	_, err := ReadArmoredKeyRing(bytes.NewBufferString("foo"))
 	if _, ok := err.(errors.InvalidArgumentError); !ok {
 		t.Errorf("error was not an InvalidArgumentError: %s", err)
 	}
+}
+
+func testReadMessageError(t *testing.T, messageHex string) {
+	buf, err := hex.DecodeString(messageHex)
+	if err != nil {
+		t.Errorf("hex.DecodeString(): %v", err)
+	}
+
+	kr, err := ReadKeyRing(new(bytes.Buffer))
+	if err != nil {
+		t.Errorf("ReadKeyring(): %v", err)
+	}
+
+	_, err = ReadMessage(bytes.NewBuffer(buf), kr,
+		func([]Key, bool) ([]byte, error) {
+			return []byte("insecure"), nil
+		}, nil)
+
+	if err == nil {
+		t.Errorf("ReadMessage(): Unexpected nil error")
+	}
+}
+
+func TestIssue11503(t *testing.T) {
+	testReadMessageError(t, "8c040402000aa430aa8228b9248b01fc899a91197130303030")
+}
+
+func TestIssue11504(t *testing.T) {
+	testReadMessageError(t, "9303000130303030303030303030983002303030303030030000000130")
 }
 
 const testKey1KeyId = 0xA34D7E18C20C31BB
@@ -409,8 +487,26 @@ VrM0m72/jnpKo04=
 =zNCn
 -----END PGP PRIVATE KEY BLOCK-----`
 
+const e2ePublicKey = `-----BEGIN PGP PUBLIC KEY BLOCK-----
+Charset: UTF-8
+
+xv8AAABSBAAAAAATCCqGSM49AwEHAgME1LRoXSpOxtHXDUdmuvzchyg6005qIBJ4
+sfaSxX7QgH9RV2ONUhC+WiayCNADq+UMzuR/vunSr4aQffXvuGnR383/AAAAFDxk
+Z2lsQHlhaG9vLWluYy5jb20+wv8AAACGBBATCAA4/wAAAAWCVGvAG/8AAAACiwn/
+AAAACZC2VkQCOjdvYf8AAAAFlQgJCgv/AAAAA5YBAv8AAAACngEAAE1BAP0X8veD
+24IjmI5/C6ZAfVNXxgZZFhTAACFX75jUA3oD6AEAzoSwKf1aqH6oq62qhCN/pekX
++WAsVMBhNwzLpqtCRjLO/wAAAFYEAAAAABIIKoZIzj0DAQcCAwT50ain7vXiIRv8
+B1DO3x3cE/aattZ5sHNixJzRCXi2vQIA5QmOxZ6b5jjUekNbdHG3SZi1a2Ak5mfX
+fRxC/5VGAwEIB8L/AAAAZQQYEwgAGP8AAAAFglRrwBz/AAAACZC2VkQCOjdvYQAA
+FJAA9isX3xtGyMLYwp2F3nXm7QEdY5bq5VUcD/RJlj792VwA/1wH0pCzVLl4Q9F9
+ex7En5r7rHR5xwX82Msc+Rq9dSyO
+=7MrZ
+-----END PGP PUBLIC KEY BLOCK-----`
+
 const dsaKeyWithSHA512 = `9901a2044f04b07f110400db244efecc7316553ee08d179972aab87bb1214de7692593fcf5b6feb1c80fba268722dd464748539b85b81d574cd2d7ad0ca2444de4d849b8756bad7768c486c83a824f9bba4af773d11742bdfb4ac3b89ef8cc9452d4aad31a37e4b630d33927bff68e879284a1672659b8b298222fc68f370f3e24dccacc4a862442b9438b00a0ea444a24088dc23e26df7daf8f43cba3bffc4fe703fe3d6cd7fdca199d54ed8ae501c30e3ec7871ea9cdd4cf63cfe6fc82281d70a5b8bb493f922cd99fba5f088935596af087c8d818d5ec4d0b9afa7f070b3d7c1dd32a84fca08d8280b4890c8da1dde334de8e3cad8450eed2a4a4fcc2db7b8e5528b869a74a7f0189e11ef097ef1253582348de072bb07a9fa8ab838e993cef0ee203ff49298723e2d1f549b00559f886cd417a41692ce58d0ac1307dc71d85a8af21b0cf6eaa14baf2922d3a70389bedf17cc514ba0febbd107675a372fe84b90162a9e88b14d4b1c6be855b96b33fb198c46f058568817780435b6936167ebb3724b680f32bf27382ada2e37a879b3d9de2abe0c3f399350afd1ad438883f4791e2e3b4184453412068617368207472756e636174696f6e207465737488620413110a002205024f04b07f021b03060b090807030206150802090a0b0416020301021e01021780000a0910ef20e0cefca131581318009e2bf3bf047a44d75a9bacd00161ee04d435522397009a03a60d51bd8a568c6c021c8d7cf1be8d990d6417b0020003`
 
 const unknownHashFunctionHex = `8a00000040040001990006050253863c24000a09103b4fe6acc0b21f32ffff01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101`
 
-const missingHashFunctionHex = `8a00000040040001030006050253863c24000a09103b4fe6acc0b21f32ffff01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101`
+const missingHashFunctionHex = `8a00000040040001030006050253863c24000a09103b4fe6acc0b21f32ffff0101010101010101010101010101010101010101010101010101010101010101010101010101`
+
+const campbellQuine = `a0b001000300fcffa0b001000d00f2ff000300fcffa0b001000d00f2ff8270a01c00000500faff8270a01c00000500faff000500faff001400ebff8270a01c00000500faff000500faff001400ebff428821c400001400ebff428821c400001400ebff428821c400001400ebff428821c400001400ebff428821c400000000ffff000000ffff000b00f4ff428821c400000000ffff000000ffff000b00f4ff0233214c40000100feff000233214c40000100feff0000`

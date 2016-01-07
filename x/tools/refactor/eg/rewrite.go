@@ -1,3 +1,9 @@
+// Copyright 2014 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// +build go1.5
+
 package eg
 
 // This file defines the AST rewriting pass.
@@ -8,14 +14,14 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"go/types"
 	"os"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 
-	"golang.org/x/tools/astutil"
-	"golang.org/x/tools/go/types"
+	"golang.org/x/tools/go/ast/astutil"
 )
 
 // Transform applies the transformation to the specified parsed file,
@@ -31,7 +37,7 @@ import (
 func (tr *Transformer) Transform(info *types.Info, pkg *types.Package, file *ast.File) int {
 	if !tr.seenInfos[info] {
 		tr.seenInfos[info] = true
-		mergeTypeInfo(&tr.info.Info, info)
+		mergeTypeInfo(tr.info, info)
 	}
 	tr.currentPkg = pkg
 	tr.nsubsts = 0
@@ -234,7 +240,7 @@ func (tr *Transformer) subst(env map[string]ast.Expr, pattern, pos reflect.Value
 	// denoted by unqualified identifiers.
 	//
 	if tr.importedObjs != nil && pattern.Type() == selectorExprType {
-		obj := isRef(pattern.Interface().(*ast.SelectorExpr), &tr.info)
+		obj := isRef(pattern.Interface().(*ast.SelectorExpr), tr.info)
 		if obj != nil {
 			if sel, ok := tr.importedObjs[obj]; ok {
 				var id ast.Expr
@@ -288,7 +294,7 @@ func (tr *Transformer) subst(env map[string]ast.Expr, pattern, pos reflect.Value
 		// All ast.Node implementations are *structs,
 		// so this case catches them all.
 		if e := rvToExpr(v); e != nil {
-			updateTypeInfo(&tr.info.Info, e, p.Interface().(ast.Expr))
+			updateTypeInfo(tr.info, e, p.Interface().(ast.Expr))
 		}
 		return v
 

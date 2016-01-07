@@ -20,16 +20,19 @@ package main // import "golang.org/x/tools/cmd/callgraph"
 //     callee file/line/col
 
 import (
+	"bufio"
 	"bytes"
 	"flag"
 	"fmt"
 	"go/build"
 	"go/token"
 	"io"
+	"log"
 	"os"
 	"runtime"
 	"text/template"
 
+	"golang.org/x/tools/go/buildutil"
 	"golang.org/x/tools/go/callgraph"
 	"golang.org/x/tools/go/callgraph/cha"
 	"golang.org/x/tools/go/callgraph/rta"
@@ -37,17 +40,28 @@ import (
 	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/go/pointer"
 	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/ssautil"
 )
 
-var algoFlag = flag.String("algo", "rta",
-	`Call graph construction algorithm, one of "rta" or "pta"`)
+// flags
+var (
+	algoFlag = flag.String("algo", "rta",
+		`Call graph construction algorithm (static, cha, rta, pta)`)
 
-var testFlag = flag.Bool("test", false,
-	"Loads test code (*_test.go) for imported packages")
+	testFlag = flag.Bool("test", false,
+		"Loads test code (*_test.go) for imported packages")
 
-var formatFlag = flag.String("format",
-	"{{.Caller}}\t--{{.Dynamic}}-{{.Line}}:{{.Column}}-->\t{{.Callee}}",
-	"A template expression specifying how to format an edge")
+	formatFlag = flag.String("format",
+		"{{.Caller}}\t--{{.Dynamic}}-{{.Line}}:{{.Column}}-->\t{{.Callee}}",
+		"A template expression specifying how to format an edge")
+
+	ptalogFlag = flag.String("ptalog", "",
+		"Location of the points-to analysis log file, or empty to disable logging.")
+)
+
+func init() {
+	flag.Var((*buildutil.TagsFlag)(&build.Default.BuildTags), "tags", buildutil.TagsFlagDoc)
+}
 
 const Usage = `callgraph: display the the call graph of a Go program.
 
@@ -153,10 +167,7 @@ func main() {
 var stdout io.Writer = os.Stdout
 
 func doCallgraph(ctxt *build.Context, algo, format string, tests bool, args []string) error {
-	conf := loader.Config{
-		Build:         ctxt,
-		SourceImports: true,
-	}
+	conf := loader.Config{Build: ctxt}
 
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, Usage)
@@ -176,8 +187,8 @@ func doCallgraph(ctxt *build.Context, algo, format string, tests bool, args []st
 	}
 
 	// Create and build SSA-form program representation.
-	prog := ssa.Create(iprog, 0)
-	prog.BuildAll()
+	prog := ssautil.CreateProgram(iprog, 0)
+	prog.Build()
 
 	// -- call graph construction ------------------------------------------
 
@@ -191,6 +202,25 @@ func doCallgraph(ctxt *build.Context, algo, format string, tests bool, args []st
 		cg = cha.CallGraph(prog)
 
 	case "pta":
+		// Set up points-to analysis log file.
+		var ptalog io.Writer
+		if *ptalogFlag != "" {
+			if f, err := os.Create(*ptalogFlag); err != nil {
+				log.Fatalf("Failed to create PTA log file: %s", err)
+			} else {
+				buf := bufio.NewWriter(f)
+				ptalog = buf
+				defer func() {
+					if err := buf.Flush(); err != nil {
+						log.Printf("flush: %s", err)
+					}
+					if err := f.Close(); err != nil {
+						log.Printf("close: %s", err)
+					}
+				}()
+			}
+		}
+
 		main, err := mainPackage(prog, tests)
 		if err != nil {
 			return err
@@ -198,6 +228,7 @@ func doCallgraph(ctxt *build.Context, algo, format string, tests bool, args []st
 		config := &pointer.Config{
 			Mains:          []*ssa.Package{main},
 			BuildCallGraph: true,
+			Log:            ptalog,
 		}
 		ptares, err := pointer.Analyze(config)
 		if err != nil {
@@ -237,7 +268,7 @@ func doCallgraph(ctxt *build.Context, algo, format string, tests bool, args []st
 	case "graphviz":
 		before = "digraph callgraph {\n"
 		after = "}\n"
-		format = `  {{printf "%q" .Caller}} -> {{printf "%q" .Callee}}"`
+		format = `  {{printf "%q" .Caller}} -> {{printf "%q" .Callee}}`
 	}
 
 	tmpl, err := template.New("-format").Parse(format)
@@ -292,7 +323,7 @@ func mainPackage(prog *ssa.Program, tests bool) (*ssa.Package, error) {
 
 	// Otherwise, use the first package named main.
 	for _, pkg := range pkgs {
-		if pkg.Object.Name() == "main" {
+		if pkg.Pkg.Name() == "main" {
 			if pkg.Func("main") == nil {
 				return nil, fmt.Errorf("no func main() in main package")
 			}

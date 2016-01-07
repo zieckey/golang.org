@@ -95,9 +95,9 @@ var (
 	declLinks      = flag.Bool("links", true, "link identifiers to their declarations")
 
 	// search index
-	indexEnabled = flag.Bool("index", false, "enable search index")
-	indexFiles   = flag.String("index_files", "", "glob pattern specifying index files;"+
-		"if not empty, the index is read from these files in sorted order")
+	indexEnabled  = flag.Bool("index", false, "enable search index")
+	indexFiles    = flag.String("index_files", "", "glob pattern specifying index files; if not empty, the index is read from these files in sorted order")
+	indexInterval = flag.Duration("index_interval", 0, "interval of indexing; 0 for default (5m), negative to only index once at startup")
 	maxResults    = flag.Int("maxresults", 10000, "maximum number of full text search results shown")
 	indexThrottle = flag.Float64("index_throttle", 0.75, "index throttle value; 0.0 = no time allocated, 1.0 = full throttle")
 
@@ -219,7 +219,9 @@ func main() {
 		corpus.IndexFullText = false
 	}
 	corpus.IndexFiles = *indexFiles
+	corpus.IndexDirectory = indexDirectoryDefault
 	corpus.IndexThrottle = *indexThrottle
+	corpus.IndexInterval = *indexInterval
 	if *writeIndex {
 		corpus.IndexThrottle = 1.0
 		corpus.IndexEnabled = true

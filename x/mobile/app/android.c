@@ -8,96 +8,92 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <jni.h>
-#include <pthread.h>
-#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include "_cgo_export.h"
 
-// Defined in android.go.
-extern pthread_cond_t go_started_cond;
-extern pthread_mutex_t go_started_mu;
-extern int go_started;
-extern JavaVM* current_vm;
+#define LOG_INFO(...) __android_log_print(ANDROID_LOG_INFO, "Go", __VA_ARGS__)
+#define LOG_FATAL(...) __android_log_print(ANDROID_LOG_FATAL, "Go", __VA_ARGS__)
 
-static int (*_rt0_arm_linux1)(int argc, char** argv);
+static jclass find_class(JNIEnv *env, const char *class_name) {
+	jclass clazz = (*env)->FindClass(env, class_name);
+	if (clazz == NULL) {
+		(*env)->ExceptionClear(env);
+		LOG_FATAL("cannot find %s", class_name);
+		return NULL;
+	}
+	return clazz;
+}
+
+static jmethodID find_method(JNIEnv *env, jclass clazz, const char *name, const char *sig) {
+	jmethodID m = (*env)->GetMethodID(env, clazz, name, sig);
+	if (m == 0) {
+		(*env)->ExceptionClear(env);
+		LOG_FATAL("cannot find method %s %s", name, sig);
+		return 0;
+	}
+	return m;
+}
+
+jmethodID key_rune_method;
 
 jint JNI_OnLoad(JavaVM* vm, void* reserved) {
-	current_vm = vm;
-
 	JNIEnv* env;
 	if ((*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6) != JNI_OK) {
 		return -1;
 	}
 
-	pthread_mutex_lock(&go_started_mu);
-	go_started = 0;
-	pthread_mutex_unlock(&go_started_mu);
-	pthread_cond_init(&go_started_cond, NULL);
+	// Load classes here, which uses the correct ClassLoader.
+	current_ctx_clazz = find_class(env, "org/golang/app/GoNativeActivity");
+	current_ctx_clazz = (jclass)(*env)->NewGlobalRef(env, current_ctx_clazz);
+	key_rune_method =  find_method(env, current_ctx_clazz, "getRune", "(III)I");
 
 	return JNI_VERSION_1_6;
 }
 
-static void* init_go_runtime(void* unused) {
-	_rt0_arm_linux1 = (int (*)(int, char**))dlsym(RTLD_DEFAULT, "_rt0_arm_linux1");
-	if (_rt0_arm_linux1 == NULL) {
-		__android_log_print(ANDROID_LOG_FATAL, "Go", "missing _rt0_arm_linux1");
-	}
+int main_running = 0;
 
-	// Defensively heap-allocate argv0, for setenv.
-	char* argv0 = strdup("gojni");
-
-	// Build argv, including the ELF auxiliary vector.
-	struct {
-		char* argv[2];
-		char* envp[2];
-		uint32_t auxv[64];
-	} x;
-	x.argv[0] = argv0;
-	x.argv[1] = NULL;
-	x.envp[0] = argv0;
-	x.envp[1] = NULL;
-
-	build_auxv(x.auxv, sizeof(x.auxv)/sizeof(uint32_t));
-	int32_t argc = 1;
-	_rt0_arm_linux1(argc, x.argv);
-	return NULL;
-}
-
-static void wait_go_runtime() {
-	pthread_mutex_lock(&go_started_mu);
-	while (go_started == 0) {
-		pthread_cond_wait(&go_started_cond, &go_started_mu);
-	}
-	pthread_mutex_unlock(&go_started_mu);
-	__android_log_print(ANDROID_LOG_INFO, "Go", "Runtime started");
-}
-
-pthread_t nativeactivity_t;
-
-// Runtime entry point when embedding Go in other libraries.
-void InitGoRuntime() {
-	pthread_mutex_lock(&go_started_mu);
-	go_started = 0;
-	pthread_mutex_unlock(&go_started_mu);
-	pthread_cond_init(&go_started_cond, NULL);
-
-	pthread_attr_t attr; 
-	pthread_attr_init(&attr);
-	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	pthread_create(&nativeactivity_t, NULL, init_go_runtime, NULL);
-	wait_go_runtime();
-}
-
-// Runtime entry point when using NativeActivity.
+// Entry point from our subclassed NativeActivity.
+//
+// By here, the Go runtime has been initialized (as we are running in
+// -buildmode=c-shared) but the first time it is called, Go's main.main
+// hasn't been called yet.
+//
+// The Activity may be created and destroyed multiple times throughout
+// the life of a single process. Each time, onCreate is called.
 void ANativeActivity_onCreate(ANativeActivity *activity, void* savedState, size_t savedStateSize) {
-	current_vm = activity->vm;
+	if (!main_running) {
+		JNIEnv* env = activity->env;
 
-	InitGoRuntime();
+		// Note that activity->clazz is mis-named.
+		current_vm = activity->vm;
+		current_ctx = activity->clazz;
+
+		setCurrentContext(current_vm, (*env)->NewGlobalRef(env, current_ctx));
+
+		// Set TMPDIR.
+		jmethodID gettmpdir = find_method(env, current_ctx_clazz, "getTmpdir", "()Ljava/lang/String;");
+		jstring jpath = (jstring)(*env)->CallObjectMethod(env, current_ctx, gettmpdir, NULL);
+		const char* tmpdir = (*env)->GetStringUTFChars(env, jpath, NULL);
+		if (setenv("TMPDIR", tmpdir, 1) != 0) {
+			LOG_INFO("setenv(\"TMPDIR\", \"%s\", 1) failed: %d", tmpdir, errno);
+		}
+		(*env)->ReleaseStringUTFChars(env, jpath, tmpdir);
+
+		// Call the Go main.main.
+		uintptr_t mainPC = (uintptr_t)dlsym(RTLD_DEFAULT, "main.main");
+		if (!mainPC) {
+			LOG_FATAL("missing main.main");
+		}
+		callMain(mainPC);
+		main_running = 1;
+	}
 
 	// These functions match the methods on Activity, described at
 	// http://developer.android.com/reference/android/app/Activity.html
+	//
+	// Note that onNativeWindowResized is not called on resize. Avoid it.
+	// https://code.google.com/p/android/issues/detail?id=180645
 	activity->callbacks->onStart = onStart;
 	activity->callbacks->onResume = onResume;
 	activity->callbacks->onSaveInstanceState = onSaveInstanceState;
@@ -106,27 +102,91 @@ void ANativeActivity_onCreate(ANativeActivity *activity, void* savedState, size_
 	activity->callbacks->onDestroy = onDestroy;
 	activity->callbacks->onWindowFocusChanged = onWindowFocusChanged;
 	activity->callbacks->onNativeWindowCreated = onNativeWindowCreated;
-	activity->callbacks->onNativeWindowResized = onNativeWindowResized;
 	activity->callbacks->onNativeWindowRedrawNeeded = onNativeWindowRedrawNeeded;
 	activity->callbacks->onNativeWindowDestroyed = onNativeWindowDestroyed;
 	activity->callbacks->onInputQueueCreated = onInputQueueCreated;
 	activity->callbacks->onInputQueueDestroyed = onInputQueueDestroyed;
-	// TODO(crawshaw): Type mismatch for onContentRectChanged.
-	//activity->callbacks->onContentRectChanged = onContentRectChanged;
 	activity->callbacks->onConfigurationChanged = onConfigurationChanged;
 	activity->callbacks->onLowMemory = onLowMemory;
 
 	onCreate(activity);
 }
 
-// Runtime entry point when embedding Go in a Java App.
-JNIEXPORT void JNICALL
-Java_go_Go_run(JNIEnv* env, jclass clazz) {
-	init_go_runtime(NULL);
+// TODO(crawshaw): Test configuration on more devices.
+const EGLint RGB_888[] = {
+	EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+	EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+	EGL_BLUE_SIZE, 8,
+	EGL_GREEN_SIZE, 8,
+	EGL_RED_SIZE, 8,
+	EGL_DEPTH_SIZE, 16,
+	EGL_CONFIG_CAVEAT, EGL_NONE,
+	EGL_NONE
+};
+
+EGLDisplay display = NULL;
+EGLSurface surface = NULL;
+
+char* initEGLDisplay() {
+	display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+	if (!eglInitialize(display, 0, 0)) {
+		return "EGL initialize failed";
+	}
+	return NULL;
 }
 
-// Used by Java initialization code to know when it can use cgocall.
-JNIEXPORT void JNICALL
-Java_go_Go_waitForRun(JNIEnv* env, jclass clazz) {
-	wait_go_runtime();
+char* createEGLSurface(ANativeWindow* window) {
+	char* err;
+	EGLint numConfigs, format;
+	EGLConfig config;
+	EGLContext context;
+
+	if (display == 0) {
+		if ((err = initEGLDisplay()) != NULL) {
+			return err;
+		}
+	}
+
+	if (!eglChooseConfig(display, RGB_888, &config, 1, &numConfigs)) {
+		return "EGL choose RGB_888 config failed";
+	}
+	if (numConfigs <= 0) {
+		return "EGL no config found";
+	}
+
+	eglGetConfigAttrib(display, config, EGL_NATIVE_VISUAL_ID, &format);
+	if (ANativeWindow_setBuffersGeometry(window, 0, 0, format) != 0) {
+		return "EGL set buffers geometry failed";
+	}
+
+	surface = eglCreateWindowSurface(display, config, window, NULL);
+	if (surface == EGL_NO_SURFACE) {
+		return "EGL create surface failed";
+	}
+
+	const EGLint contextAttribs[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
+	context = eglCreateContext(display, config, EGL_NO_CONTEXT, contextAttribs);
+
+	if (eglMakeCurrent(display, surface, surface, context) == EGL_FALSE) {
+		return "eglMakeCurrent failed";
+	}
+	return NULL;
+}
+
+char* destroyEGLSurface() {
+	if (!eglDestroySurface(display, surface)) {
+		return "EGL destroy surface failed";
+	}
+	return NULL;
+}
+
+int32_t getKeyRune(JNIEnv* env, AInputEvent* e) {
+	return (int32_t)(*env)->CallIntMethod(
+		env,
+		current_ctx,
+		key_rune_method,
+		AInputEvent_getDeviceId(e),
+		AKeyEvent_getKeyCode(e),
+		AKeyEvent_getMetaState(e)
+	);
 }

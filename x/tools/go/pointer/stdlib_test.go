@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Incomplete source tree on Android.
+
+// +build !android
+
 package pointer
 
 // This file runs the pointer analysis on all packages and tests beneath
@@ -35,10 +39,7 @@ func TestStdlib(t *testing.T) {
 	// Load, parse and type-check the program.
 	ctxt := build.Default // copy
 	ctxt.GOPATH = ""      // disable GOPATH
-	conf := loader.Config{
-		SourceImports: true,
-		Build:         &ctxt,
-	}
+	conf := loader.Config{Build: &ctxt}
 	if _, err := conf.FromArgs(buildutil.AllPackages(conf.Build), true); err != nil {
 		t.Errorf("FromArgs failed: %v", err)
 		return
@@ -50,8 +51,8 @@ func TestStdlib(t *testing.T) {
 	}
 
 	// Create SSA packages.
-	prog := ssa.Create(iprog, 0)
-	prog.BuildAll()
+	prog := ssautil.CreateProgram(iprog, 0)
+	prog.Build()
 
 	numPkgs := len(prog.AllPackages())
 	if want := 240; numPkgs < want {

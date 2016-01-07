@@ -12,7 +12,11 @@ func f(spilled, unspilled int) {
 	_ = /*@Parameter*/ (unspilled)
 	_ = /*@<nil>*/ (1 + 2) // (constant)
 	i := 0
+
+	f := func() (int, int) { return 0, 0 }
+
 	/*@Call*/ (print( /*@BinOp*/ (i + 1)))
+	_, _ = /*@Call*/ (f())
 	ch := /*@MakeChan*/ (make(chan int))
 	/*@UnOp*/ (<-ch)
 	x := /*@UnOp*/ (<-ch)
@@ -33,7 +37,7 @@ func f(spilled, unspilled int) {
 	_ = /*@Phi*/ (y)
 	map1 := /*@MakeMap*/ (make(map[string]string))
 	_ = map1
-	_ = /*@MakeSlice*/ (make([]int, 0))
+	_ = /*@Slice*/ (make([]int, 0))
 	_ = /*@MakeClosure*/ (func() { print(spilled) })
 
 	sl := []int{}
@@ -76,11 +80,11 @@ func complit() {
 	// 1. Slices
 	print( /*@Slice*/ ([]int{}))
 	print( /*@Alloc*/ (&[]int{}))
-	print(& /*@Alloc*/ ([]int{}))
+	print(& /*@Slice*/ ([]int{}))
 
 	sl1 := /*@Slice*/ ([]int{})
 	sl2 := /*@Alloc*/ (&[]int{})
-	sl3 := & /*@Alloc*/ ([]int{})
+	sl3 := & /*@Slice*/ ([]int{})
 	_, _, _ = sl1, sl2, sl3
 
 	_ = /*@Slice*/ ([]int{})
@@ -98,18 +102,18 @@ func complit() {
 	_, _, _ = arr1, arr2, arr3
 
 	_ = /*@UnOp*/ ([1]int{})
-	_ = /*@Alloc*/ (& /*@Alloc*/ ([1]int{})) // & optimized away
+	_ = /*@Alloc*/ (& /*@Alloc*/ ([1]int{}))
 	_ = & /*@Alloc*/ ([1]int{})
 
 	// 3. Maps
 	type M map[int]int
 	print( /*@MakeMap*/ (M{}))
 	print( /*@Alloc*/ (&M{}))
-	print(& /*@Alloc*/ (M{}))
+	print(& /*@MakeMap*/ (M{}))
 
 	m1 := /*@MakeMap*/ (M{})
 	m2 := /*@Alloc*/ (&M{})
-	m3 := & /*@Alloc*/ (M{})
+	m3 := & /*@MakeMap*/ (M{})
 	_, _, _ = m1, m2, m3
 
 	_ = /*@MakeMap*/ (M{})

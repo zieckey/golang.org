@@ -21,7 +21,7 @@ import (
 func TestPacketConnReadWriteUnicastUDP(t *testing.T) {
 	switch runtime.GOOS {
 	case "nacl", "plan9", "solaris", "windows":
-		t.Skipf("not supported on %q", runtime.GOOS)
+		t.Skipf("not supported on %s", runtime.GOOS)
 	}
 	if !supportsIPv6 {
 		t.Skip("ipv6 is not supported")
@@ -54,7 +54,7 @@ func TestPacketConnReadWriteUnicastUDP(t *testing.T) {
 	for i, toggle := range []bool{true, false, true} {
 		if err := p.SetControlMessage(cf, toggle); err != nil {
 			if nettest.ProtocolNotSupported(err) {
-				t.Skipf("not supported on %q", runtime.GOOS)
+				t.Skipf("not supported on %s", runtime.GOOS)
 			}
 			t.Fatal(err)
 		}
@@ -71,12 +71,10 @@ func TestPacketConnReadWriteUnicastUDP(t *testing.T) {
 		if err := p.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
 			t.Fatal(err)
 		}
-		if n, cm, _, err := p.ReadFrom(rb); err != nil {
+		if n, _, _, err := p.ReadFrom(rb); err != nil {
 			t.Fatal(err)
 		} else if !bytes.Equal(rb[:n], wb) {
 			t.Fatalf("got %v; want %v", rb[:n], wb)
-		} else {
-			t.Logf("rcvd cmsg: %v", cm)
 		}
 	}
 }
@@ -84,13 +82,13 @@ func TestPacketConnReadWriteUnicastUDP(t *testing.T) {
 func TestPacketConnReadWriteUnicastICMP(t *testing.T) {
 	switch runtime.GOOS {
 	case "nacl", "plan9", "solaris", "windows":
-		t.Skipf("not supported on %q", runtime.GOOS)
+		t.Skipf("not supported on %s", runtime.GOOS)
 	}
 	if !supportsIPv6 {
 		t.Skip("ipv6 is not supported")
 	}
-	if os.Getuid() != 0 {
-		t.Skip("must be root")
+	if m, ok := nettest.SupportsRawIPSocket(); !ok {
+		t.Skip(m)
 	}
 
 	c, err := net.ListenPacket("ip6:ipv6-icmp", "::1")
@@ -149,7 +147,7 @@ func TestPacketConnReadWriteUnicastICMP(t *testing.T) {
 		}
 		if err := p.SetControlMessage(cf, toggle); err != nil {
 			if nettest.ProtocolNotSupported(err) {
-				t.Skipf("not supported on %q", runtime.GOOS)
+				t.Skipf("not supported on %s", runtime.GOOS)
 			}
 			t.Fatal(err)
 		}
@@ -166,15 +164,14 @@ func TestPacketConnReadWriteUnicastICMP(t *testing.T) {
 		if err := p.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
 			t.Fatal(err)
 		}
-		if n, cm, _, err := p.ReadFrom(rb); err != nil {
+		if n, _, _, err := p.ReadFrom(rb); err != nil {
 			switch runtime.GOOS {
 			case "darwin": // older darwin kernels have some limitation on receiving icmp packet through raw socket
-				t.Logf("not supported on %q", runtime.GOOS)
+				t.Logf("not supported on %s", runtime.GOOS)
 				continue
 			}
 			t.Fatal(err)
 		} else {
-			t.Logf("rcvd cmsg: %v", cm)
 			if m, err := icmp.ParseMessage(iana.ProtocolIPv6ICMP, rb[:n]); err != nil {
 				t.Fatal(err)
 			} else if m.Type != ipv6.ICMPTypeEchoReply || m.Code != 0 {

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package analysis
 
 // This file computes the "implements" relation over all pairs of
@@ -11,14 +13,15 @@ package analysis
 // belong to different packages and at least one is not exported?
 
 import (
+	"go/types"
 	"sort"
 
-	"golang.org/x/tools/go/types"
+	"golang.org/x/tools/go/types/typeutil"
 )
 
 // computeImplements computes the "implements" relation over all pairs
 // of named types in allNamed.
-func computeImplements(cache *types.MethodSetCache, allNamed []*types.Named) map[*types.Named]implementsFacts {
+func computeImplements(cache *typeutil.MethodSetCache, allNamed []*types.Named) map[*types.Named]implementsFacts {
 	// Information about a single type's method set.
 	type msetInfo struct {
 		typ          types.Type

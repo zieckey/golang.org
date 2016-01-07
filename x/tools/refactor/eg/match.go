@@ -1,16 +1,22 @@
+// Copyright 2014 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// +build go1.5
+
 package eg
 
 import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"go/types"
 	"log"
 	"os"
 	"reflect"
 
+	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/exact"
-	"golang.org/x/tools/go/loader"
-	"golang.org/x/tools/go/types"
 )
 
 // matchExpr reports whether pattern x matches y.
@@ -41,8 +47,8 @@ func (tr *Transformer) matchExpr(x, y ast.Expr) bool {
 
 	// Object identifiers (including pkg-qualified ones)
 	// are handled semantically, not syntactically.
-	xobj := isRef(x, &tr.info)
-	yobj := isRef(y, &tr.info)
+	xobj := isRef(x, tr.info)
+	yobj := isRef(y, tr.info)
 	if xobj != nil {
 		return xobj == yobj
 	}
@@ -184,7 +190,17 @@ func (tr *Transformer) matchWildcard(xobj *types.Var, y ast.Expr) bool {
 	}
 
 	// Check that y is assignable to the declared type of the param.
-	if yt := tr.info.TypeOf(y); !types.AssignableTo(yt, xobj.Type()) {
+	yt := tr.info.TypeOf(y)
+	if yt == nil {
+		// y has no type.
+		// Perhaps it is an *ast.Ellipsis in [...]T{}, or
+		// an *ast.KeyValueExpr in T{k: v}.
+		// Clearly these pseudo-expressions cannot match a
+		// wildcard, but it would nice if we had a way to ignore
+		// the difference between T{v} and T{k:v} for structs.
+		return false
+	}
+	if !types.AssignableTo(yt, xobj.Type()) {
 		if tr.verbose {
 			fmt.Fprintf(os.Stderr, "%s not assignable to %s\n", yt, xobj.Type())
 		}
@@ -216,22 +232,11 @@ func (tr *Transformer) matchWildcard(xobj *types.Var, y ast.Expr) bool {
 
 // -- utilities --------------------------------------------------------
 
-// unparen returns e with any enclosing parentheses stripped.
-// TODO(adonovan): move to astutil package.
-func unparen(e ast.Expr) ast.Expr {
-	for {
-		p, ok := e.(*ast.ParenExpr)
-		if !ok {
-			break
-		}
-		e = p.X
-	}
-	return e
-}
+func unparen(e ast.Expr) ast.Expr { return astutil.Unparen(e) }
 
 // isRef returns the object referred to by this (possibly qualified)
 // identifier, or nil if the node is not a referring identifier.
-func isRef(n ast.Node, info *loader.PackageInfo) types.Object {
+func isRef(n ast.Node, info *types.Info) types.Object {
 	switch n := n.(type) {
 	case *ast.Ident:
 		return info.Uses[n]
